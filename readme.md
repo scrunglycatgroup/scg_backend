@@ -1,6 +1,6 @@
 # SCG backend
-
-This repo is for the server backend work
+![A picture of a waiter (in the style of a patent iamge](logo.png)
+   | *Server software*
 
 ## Plans
 ### Current Goals
