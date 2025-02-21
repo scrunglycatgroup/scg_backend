@@ -1,13 +1,17 @@
+use crate::http_server::rocket;
 use crate::llm::TextGeneration;
 use anyhow::{Error as E, Result};
 use candle_core::DType;
 use candle_nn::VarBuilder;
 use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
 use hf_hub::{api::sync::Api, Repo, RepoType};
+#[macro_use]
+extern crate rocket;
 
+mod http_server;
 mod llm;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn test_llm() -> Result<(), Box<dyn std::error::Error>> {
     // Currently this is a lot of test code to check the model runs (very very slowly)
     println!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -49,4 +53,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1000,
     )?;
     Ok(())
+}
+
+fn main() {
+    println!("Hello world");
+    let _ = rocket();
+    // let _ = test_llm();
 }

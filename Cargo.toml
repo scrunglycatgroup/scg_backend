@@ -10,5 +10,6 @@ candle-examples = "0.8.3"
 candle-nn = "0.8.3"
 candle-transformers = "0.8.3"
 hf-hub = "0.4.1"
+rocket = "0.5.1"
 serde_json = "1.0.138"
 tokenizers = "0.19.1"  # This is downgraded to match another version of tokenizers used by candle_examples
