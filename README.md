@@ -4,6 +4,18 @@
 
 ## How to setup
 
+You are going to need poetry
+To use poetry well I would suggest setting up the virtual env this requires running the commands
+`poetry env use 3.13.2`
+`poetry activate`
+then run the command that it shows i.e.
+`soruce ~/.cache/pypoetry/virtualenvs/scg-backend-qOx8M4AN-py3.13/bin/activate`
+though this may differ on your machine, now you current shell should have the correct files sourced and will give you less errors!
+
+`poetry install` will install all the dependencies
+
+currently running debug goes : `poetry run fastapi dev run.py`
+
 ### Getting docker 
 You will need docker to run this TODO: write docker install
 
