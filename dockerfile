@@ -1,22 +1,22 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.85 AS build 
+FROM python:3.13.2-bullseye AS runner 
 
 WORKDIR /usr/src/scg_backend
 COPY . . 
 
-# Build release
-RUN cargo install --path .
+# install dependencies
+RUN pip install poetry==2.1.1
+RUN pip install -U "huggingface_hub[cli]"
+# Pre-downlaod the model we are going to use in the applcation
+# If we switch to using more / or different models then these should also be added to this list
+RUN huggingface-cli download "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRUTALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
 
-## Create the runner build 
-FROM docker.io/debian:bookworm-slim
+RUN --mount=type=cache,target=$POETRY_CACHE_DIR poetry install --no-root
 
-RUN apt-get update && apt-get install libssl-dev -y
-
-COPY --from=build /usr/local/cargo/bin/scg_backend /usr/local/bin/scg_backend
-
-ENV ROCKET_ADDRESS=0.0.0.0
-ENV ROCKET_PORT=8080
-
-#RUN
-CMD ["scg_backend"]
+# This should be what the dockerfile runs
+ENTRYPOINT ["poetry", "run", "fastapi", "run", "run.py"]
