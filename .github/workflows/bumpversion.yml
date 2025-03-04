@@ -26,13 +26,13 @@ jobs:
       - name: Determine version bump type
         id: bump-type
         run: |
-          if echo "$labels" | grep -q "MAJOR"; then
+          if echo "$LABELS" | grep -q "MAJOR"; then
             echo "bump=major" >> $GITHUB_ENV
-          elif echo "$labels" | grep -q "MINOR"; then
+          elif echo "$LABELS" | grep -q "MINOR"; then
             echo "bump=minor" >> $GITHUB_ENV
-          elif echo "$labels" | grep -q "PATCH"; then
+          elif echo "$LABELS" | grep -q "PATCH"; then
             echo "bump=patch" >> $GITHUB_ENV
-          elif echo "$labels" | grep -q "NOBUMP"; then
+          elif echo "$LABELS" | grep -q "NOBUMP"; then
             echo "bump=none" >> $GITHUB_ENV
           else
             echo "bump=unknown" >> $GITHUB_ENV
