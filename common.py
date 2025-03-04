@@ -4,8 +4,8 @@ from typing import Optional, List, Dict, TypedDict
 class Connector(TypedDict):
     connector: str
     model_name: str
-    model_tag: str
-    arguments: List[Dict[str, str]]
+    model_tag: Optional[str] = "undefined"
+    arguments: Optional[List[Dict[str, str]]] = []
 
 class ModelRequest(BaseModel):
     content: str
