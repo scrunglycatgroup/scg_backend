@@ -1,0 +1,88 @@
+name: Bump Version
+
+on:
+  pull_request:
+    types:
+      - closed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get PR labels
+        id: labels
+        run: |
+          LABELS=$(jq -r 'map(.name) | join(" ")' "$GITHUB_EVENT_PATH" | tr -d '\n')
+          echo "labels=$LABELS" >> $GITHUB_ENV
+
+      - name: Determine version bump type
+        id: bump-type
+        run: |
+          if echo "$labels" | grep -q "MAJOR"; then
+            echo "bump=major" >> $GITHUB_ENV
+          elif echo "$labels" | grep -q "MINOR"; then
+            echo "bump=minor" >> $GITHUB_ENV
+          elif echo "$labels" | grep -q "PATCH"; then
+            echo "bump=patch" >> $GITHUB_ENV
+          elif echo "$labels" | grep -q "NOBUMP"; then
+            echo "bump=none" >> $GITHUB_ENV
+          else
+            echo "bump=unknown" >> $GITHUB_ENV
+
+      - name: Comment if no valid label
+        if: steps.bump-type.outputs.bump == 'unknown'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ⚠️ No valid version bump label found. Use one of: `MAJOR`, `MINOR`, `PATCH`, or `NOBUMP`.
+
+      - name: Extract current version
+        if: steps.bump-type.outputs.bump != 'none' && steps.bump-type.outputs.bump != 'unknown'
+        id: get-version
+        run: |
+          VERSION=$(grep '^version =' pyproject.toml | cut -d '"' -f2)
+          echo "current_version=$VERSION" >> $GITHUB_ENV
+
+      - name: Compute new version
+        if: steps.bump-type.outputs.bump != 'none' && steps.bump-type.outputs.bump != 'unknown'
+        id: compute-version
+        run: |
+          IFS='.' read -r major minor patch <<< "$current_version"
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0;;
+            minor) minor=$((minor + 1)); patch=0;;
+            patch) patch=$((patch + 1));;
+          esac
+          new_version="$major.$minor.$patch"
+          echo "new_version=$new_version" >> $GITHUB_ENV
+
+      - name: Update pyproject.toml
+        if: steps.bump-type.outputs.bump != 'none' && steps.bump-type.outputs.bump != 'unknown'
+        run: |
+          sed -i "s/^version = \"$current_version\"/version = \"$new_version\"/" pyproject.toml
+
+      - name: Commit and push changes
+        if: steps.bump-type.outputs.bump != 'none' && steps.bump-type.outputs.bump != 'unknown'
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add pyproject.toml
+          git commit -m "Bump version: $current_version -> $new_version"
+          git push origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Comment new version
+        if: steps.bump-type.outputs.bump != 'none' && steps.bump-type.outputs.bump != 'unknown'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ✅ Version updated: `${{ steps.get-version.outputs.current_version }}` → `${{ steps.compute-version.outputs.new_version }}`.
