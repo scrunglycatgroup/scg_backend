@@ -36,6 +36,7 @@ jobs:
             echo "bump=none" >> $GITHUB_ENV
           else
             echo "bump=unknown" >> $GITHUB_ENV
+          fi
 
       - name: Comment if no valid label
         if: steps.bump-type.outputs.bump == 'unknown'
