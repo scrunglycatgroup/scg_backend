@@ -47,8 +47,8 @@ jobs:
             ⚠️ No valid version bump label found. Use one of: `MAJOR`, `MINOR`, `PATCH`, or `NOBUMP`.
       
       - name: Terminate workflow after comment if no valid label
-        if: steps.bump-type.outputs.bump == 'unknown'
-        run: exit 1
+        if: steps.bump-type.outputs.bump == 'unknown' && steps.bump-type.outputs.bump == 'none'
+        run: exit 0
 
       - name: Extract current version
         if: steps.bump-type.outputs.bump != 'none' && steps.bump-type.outputs.bump != 'unknown'
