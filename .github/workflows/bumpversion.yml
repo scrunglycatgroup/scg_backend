@@ -45,6 +45,10 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
             ⚠️ No valid version bump label found. Use one of: `MAJOR`, `MINOR`, `PATCH`, or `NOBUMP`.
+      
+      - name: Terminate workflow after comment if no valid label
+        if: steps.bump-type.outputs.bump == 'unknown'
+        run: exit 1
 
       - name: Extract current version
         if: steps.bump-type.outputs.bump != 'none' && steps.bump-type.outputs.bump != 'unknown'
