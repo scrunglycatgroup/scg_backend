@@ -1,9 +1,10 @@
 [project]
 name = "scg-backend"
-version = "0.1.0"
+version = "0.1.1"
 description = "The Server Backend for the SCG project"
 authors = [
-    {name = "Jemma",email = "jf1454@york.ac.uk"}
+    {name = "Jemma",email = "jf1454@york.ac.uk"},
+    {name = "hermaplusplus", email = "is942@york.ac.uk"}
 ]
 readme = "README.md"
 package-mode = false
