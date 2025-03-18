@@ -3,8 +3,7 @@ import logging
 import sys 
 from pydantic import BaseModel
 
-
-from llm_model import Model 
+from llm_dispatcher import Dispatcher
 
 def start_logger(log_arg: str):
 
@@ -26,7 +25,7 @@ def start_logger(log_arg: str):
     return
 
 start_logger("DEBUG".upper())
-model = Model() 
+dispatcher = Dispatcher()
 
 app = FastAPI()
 
@@ -36,10 +35,9 @@ class GenerateBody(BaseModel):
 
 @app.post("/generate")
 async def basic_generate(message: GenerateBody):
-    out = model.generate(message.input, False)
+    out = await dispatcher.run_model(message.input)
     return {"message": out}
 
-    
 if __name__ == "__main__":
     print("You should be running me through `fastapi dev run.py`")
     
