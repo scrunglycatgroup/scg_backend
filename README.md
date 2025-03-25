@@ -2,19 +2,30 @@
 ![A picture of a waiter (in the style of a patent iamge](logo.png)
    | *Server software*
 
-## How to setup
+## How to set up
 
-You are going to need poetry
-To use poetry well I would suggest setting up the virtual env this requires running the commands
-`poetry env use 3.13.2`
-`poetry activate`
-then run the command that it shows i.e.
-`soruce ~/.cache/pypoetry/virtualenvs/scg-backend-qOx8M4AN-py3.13/bin/activate`
-though this may differ on your machine, now you current shell should have the correct files sourced and will give you less errors!
+First, install poetry and a recent Python version.
 
-`poetry install` will install all the dependencies
+To use poetry well, I would suggest setting up the virtual env. This requires running the commands:
+`poetry env use <your Python version>`
+`poetry env activate`
 
-currently running debug goes : `poetry run fastapi dev run.py`
+Then run the command that it shows, e.g.:
+
+`source ~/.cache/pypoetry/virtualenvs/scg-backend-qOx8M4AN-py3.13/bin/activate`
+
+Though this may differ on your machine, now your current shell should have the correct files
+sourced and will give you fewer errors!
+
+`poetry install --no-root` will install all the dependencies.
+
+To run the development server:
+
+`poetry run fastapi dev run.py`
+
+To run for production:
+
+`poetry run fastapi run run.py`
 
 ### Getting docker 
 You will need docker to run this TODO: write docker install
