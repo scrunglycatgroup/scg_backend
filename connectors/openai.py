@@ -14,25 +14,24 @@ class OpenAIConnector(BaseConnector):
 
     def __init__(
             self,
-            *,
-            model_name:str,
+            connector:Connector,
             **kwargs):
 
-        self.__model_name__ = model_name
+        self.__model_name = connector.get("model_name", "undefined")
         
         if self.__model_name == "undefined":
             raise ValueError("model_name must be defined")
 
         self.__client = OpenAI(
-            api_key=kwargs.get("api_key", None),
-            organization=kwargs.get("organization", None),
-            project=kwargs.get("project", None),
-            base_url=kwargs.get("base_url", None),
-            websocket_base_url=kwargs.get("websocket_base_url", None),
-            timeout=kwargs.get("timeout", NOT_GIVEN),
-            max_retries=kwargs.get("max_retries", 2),
-            default_headers=kwargs.get("default_headers", None),
-            default_query=kwargs.get("default_query", None),
-            http_client=kwargs.get("http_client", None),
-            _strict_response_validation=kwargs.get("_strict_response_validation", False)
+            api_key=connector["arguments"][0].get("api_key", None),
+            organization=connector["arguments"][0].get("organization", None),
+            project=connector["arguments"][0].get("project", None),
+            base_url=connector["arguments"][0].get("base_url", None),
+            websocket_base_url=connector["arguments"][0].get("websocket_base_url", None),
+            timeout=connector["arguments"][0].get("timeout", NOT_GIVEN),
+            max_retries=connector["arguments"][0].get("max_retries", 2),
+            default_headers=connector["arguments"][0].get("default_headers", None),
+            default_query=connector["arguments"][0].get("default_query", None),
+            http_client=connector["arguments"][0].get("http_client", None),
+            _strict_response_validation=connector["arguments"][0].get("_strict_response_validation", False)
         )
