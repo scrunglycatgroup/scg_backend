@@ -7,27 +7,45 @@
 First, install poetry and a recent Python version.
 
 To use poetry well, I would suggest setting up the virtual env. This requires running the commands:
-`poetry env use <your Python version>`
-`poetry env activate`
 
-Then run the command that it shows, e.g.:
+```sh
+poetry env use <your Python version>`
+$(poetry env activate)
+```
 
-`source ~/.cache/pypoetry/virtualenvs/scg-backend-qOx8M4AN-py3.13/bin/activate`
+>   ### Note
+>   On Windows, that second command may not work. Try just running:
+>
+>   ```sh
+>   poetry env activate
+>   ```
+>
+>   And then copy and paste the output, e.g. `source ~/.cache/pypoetry/virtualenvs/scg-backend-qOx8M4AN-py3.13/bin/activate` back into the Command Prompt and press enter.
 
-Though this may differ on your machine, now your current shell should have the correct files
-sourced and will give you fewer errors!
+Your current shell should now be using the correct Python environment!
 
-`poetry install --no-root` will install all the dependencies.
+Install all the project dependencies into this environment with:
+
+```
+poetry install
+```
+
+Ignore the error about the current project not being installed -- it has still installed
+the dependencies.
 
 To run the development server:
 
-`poetry run fastapi dev run.py`
+```
+poetry run fastapi dev run.py
+```
 
 To run for production:
 
-`poetry run fastapi run run.py`
+```
+poetry run fastapi run run.py
+```
 
-### Getting docker 
+## Getting docker 
 You will need docker to run this TODO: write docker install
 
 ### Next you will need to build the image
