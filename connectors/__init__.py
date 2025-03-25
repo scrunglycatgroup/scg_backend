@@ -5,6 +5,8 @@
 This module provides the base class for connectors and imports specific connectors.
 """
 
+from common import *
+
 from . import openai
 # TODO: Add `scrungly` and `local` connectors
 

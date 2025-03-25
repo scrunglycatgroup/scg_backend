@@ -1,9 +1,10 @@
-from . import BaseConnector
+from .__init__ import BaseConnector
+from common import *
 
-from openai import OpenAI
+from openai import OpenAI, NotGiven
 from typing import Optional, Mapping, Union
 import httpx
-from httpx import Timeout, NotGiven
+from httpx import Timeout
 
 NOT_GIVEN = NotGiven()
 
