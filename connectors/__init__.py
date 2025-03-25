@@ -15,14 +15,14 @@ from abc import ABC, abstractmethod
 # Abstract base class for connectors (analogous to interfaces in Java/C#)
 class BaseConnector(ABC):
     @abstractmethod
-    def __init__(self, *args, **kwargs):
+    def __init__(self, connector:Connector, **kwargs):
         """
         Initialize the connector and open any relevant API connections.
         """
         pass
 
     @abstractmethod
-    def completion(self, *args, **kwargs):
+    def completion(self, **kwargs):
         """
         Generate a completion from the model.
         """
