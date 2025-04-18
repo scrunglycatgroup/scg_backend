@@ -1,5 +1,5 @@
 # SCG backend
-![A picture of a waiter (in the style of a patent iamge](logo.png)
+![A picture of a waiter (in the style of a patent image](logo.png)
    | *Server software*
 
 ## How to setup
@@ -7,35 +7,51 @@
 You are going to need poetry
 To use poetry well I would suggest setting up the virtual env this requires running the commands
 `poetry env use 3.13.2`
-`poetry activate`
+`poetry env activate`
 then run the command that it shows i.e.
-`soruce ~/.cache/pypoetry/virtualenvs/scg-backend-qOx8M4AN-py3.13/bin/activate`
-though this may differ on your machine, now you current shell should have the correct files sourced and will give you less errors!
+`source ~/.cache/pypoetry/virtualenvs/scg-backend-qOx8M4AN-py3.13/bin/activate`
 
-`poetry install` will install all the dependencies
+alternatively you can use
+```
+poetry env activate | ``
+```
+which just runs whatever it pastes
+
+`poetry install --no-root` will install all the dependencies
 
 currently running debug goes : `poetry run fastapi dev run.py`
 
 ### Getting docker 
-You will need docker to run this TODO: write docker install
+You will need docker to run this
 
-### Next you will need to build the image
+   TODO: write docker install
 
-```sh
-docker build -t scg_backend_image .
+### Using docker
+Currently I have the kafka service and database on docker!
+which means we need to run them both, i use (at the moment)...
+
 ```
-Will build 2 images, one is the build image (where the binary is compiled), the other is the runner image (a minimal ubuntu setup for actually running the program)
-
-The compiled image should be distributable to other machines in docker it will have the name "scg_backend_image"
-
-### Running the image
-Currently I run the image with:
-```sh
-docker run --network host -d -it -p 8080:80 --rm --name scg_runner scg_backend_image:latest
+docker run -d --name=kafka -p 9092:9092 apache/kafka 
+```
+and
 ```
 
-### Test that it is running
-you should be able to open 0.0.0.0:8080 to get a "hello world!" message
+docker run -d --rm --name=database- pull always -p 8008:8000 surrealdb/surrealdb:latest-dev start --user root --pass root
+```
+
+### Now the services
+Start with the python application using
+```
+poetry run fastapi run run.py
+```
+
+and then start the rust app with
+
+```
+cargo run --release
+```
+
+This is a lot of stuff, I need to write a docker compose, also rewrite the entirety of the rust code because it is awful, maybe everything as well, things need command line arguments for what addresses they should point at for both kafka and the database, and generally everything should be given a strong lick of paint
 
 ## Plans
 ### Current Goals
@@ -44,7 +60,3 @@ you should be able to open 0.0.0.0:8080 to get a "hello world!" message
 - [ ] Document the whole thing
 - [x] Containerize it (in progress)
 - [ ] Anything else to get it to work best on either Viking or personal computers
-
-This is still very very in production, so lots to do just getting something out asap will work on this a lot soon!
-This is where I am getting the basis for some of the code for running the NN 
-`https://github.com/huggingface/candle/blob/main/candle-examples/examples/qwen/main.rs`
