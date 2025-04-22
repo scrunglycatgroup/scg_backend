@@ -1,4 +1,12 @@
+// This is the hardest file to understand, it's a little messy, but it works
+// and that's all I need to care about
+//
+// If you are new to rust this looks really intimidating, but just take a bit of
+// time. There is a lot of boilerplate and really this just uses an expanded version
+// of the final part of the rust-book tutorial.
+// feel free to make it look nicer if you want!
 use anyhow::{Error as E, Result};
+
 use candle_core::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
@@ -6,6 +14,7 @@ use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
 use hf_hub::api::sync::Api;
 use hf_hub::{Repo, RepoType};
+
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::RecvError;
 use std::{
@@ -15,24 +24,36 @@ use std::{
     },
     thread,
 };
+
 use surrealdb::opt::Resource;
+
 use tokio::runtime::Handle;
 
 use crate::parser::EnvVars;
 use crate::{DB, parser};
 
+// This holds all the threads and a message pipe that we can use to give a thread a job
 pub struct LLMPool {
-    workers: Vec<Worker>,
+    workers: Vec<Worker>, // the threads
     sender: Option<Sender<String>>,
 }
 
 impl LLMPool {
+    // this is __init__ for rust (basically), there are a few good reasons why
+    // it isn't the same as __init__. https://www.youtube.com/watch?v=KWB-gDVuy_I
+    // exlpains why this is better, but tldr: creation factories stop you from
+    // reading from an object before it is ready
     pub fn new(size: usize, handle: Arc<Handle>, env_vars: &EnvVars) -> LLMPool {
         let (tx, rx) = channel();
-        let rx = Arc::new(Mutex::new(rx));
+        let rx = Arc::new(Mutex::new(rx)); // here we create a message pipe,
+        // each worker gets a copy of the receiver and each one will try and `lock`
+        // it. The receiver will be unlocked as soon as the the current locking
+        // thread gets a message, meaning another thread can lock it and wait.
+
         let mut workers = Vec::with_capacity(size);
         for id in 0..size {
             workers.push(Worker::new(
+                // create a new thread we will hold onto
                 id,
                 Arc::clone(&rx),
                 Arc::clone(&handle),
@@ -47,22 +68,30 @@ impl LLMPool {
         }
     }
 
+    // when this is called we send something to the receiver, whichever thread
+    // has the lock will take the String and then do whatever it needs to with it.
     pub fn execute(&self, job: String) {
         self.sender.as_ref().unwrap().send(job).unwrap();
     }
 }
 
+// When we are done with LLMPool we need to shut down all the threads
 impl Drop for LLMPool {
     fn drop(&mut self) {
+        drop(self.sender.take()); // we drop the sender which sends each thread
+        // an Err(_) where in the main loop we close on recieving one
         for worker in &mut self.workers {
             println!("Shutting down workers {}", worker.id);
             if let Some(thread) = worker.thread.take() {
                 thread.join().unwrap();
+                // once threads have finished running their code join will close them
             }
         }
     }
 }
 
+// This is a `thread` really it's just an instance of the LLM and it will
+// probably actuall use multiple threads for each one
 pub struct Worker {
     id: usize,
     thread: Option<thread::JoinHandle<()>>,
@@ -70,12 +99,14 @@ pub struct Worker {
 
 type WorkerRecv = Arc<Mutex<Receiver<String>>>;
 
+// What the database entry should have
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
     input: String,
     output: String,
 }
 
+// for updating a database element with whatever the code produces
 #[derive(Debug, Serialize)]
 struct FurfilRequest {
     output: String,
@@ -89,8 +120,13 @@ impl Worker {
         db_table: String,
         lazy_load: bool,
     ) -> Worker {
+        // note all this code isn't run before we actually construct the Worker,
+        // simply this thread variable creates a new sub-process that will run all of the code inside the `{}` in a seperate thread!
+        // Because of thread safety reasons we need to pass certain things as references
         let thread = thread::spawn(move || {
             if lazy_load {
+                // if we are lazy loading we wait until recieving the first message before starting everything
+                // from then on we just loop like usual
                 let message = recv.lock().unwrap().recv();
                 let llm = Worker::spool_llm().unwrap();
                 if let Ok(llm_out) =
@@ -99,6 +135,7 @@ impl Worker {
                     Worker::run(llm_out, &recv, handle, &db_table)
                 }
             } else {
+                // we aren't lazy loading so every thread starts spooling up immediately
                 let llm = Worker::spool_llm().unwrap();
                 Worker::run(llm, &recv, handle, &db_table)
             }
@@ -109,6 +146,7 @@ impl Worker {
         }
     }
 
+    // This is **A LOT** of boilerplate, basically just starts a new llm and loads everything we need to
     fn spool_llm() -> Result<LLM, ()> {
         let start = std::time::Instant::now();
         let api = Api::new().map_err(|_| ())?;
@@ -138,26 +176,31 @@ impl Worker {
         println!("loaded the model in {:?}", start.elapsed());
 
         Ok(LLM::new(
-            model,
-            tokenizer,
-            12345,
-            Some(0.7),
+            model,     // the model we are using
+            tokenizer, // the tokeniser which handles inputs and outputs to the modle
+            12345,     // the seed for all the randomness they need
+            Some(0.7), // the temp for using that randomness
             None,
-            1.1,
-            64,
-            &device,
+            1.1,     // how much we penalise for it repeating itself
+            64,      // how many tokens we care about for the repeating
+            &device, // info on what we are running it on
         ))
     }
 
+    // this is the main loop of each thread, it waits for a message, and then runs the LLM when it recieves one
     fn run(llm: LLM, reciever: &WorkerRecv, handle: Arc<Handle>, surreal_table: &String) {
         let mut running_llm = llm;
         loop {
             let message = reciever.lock().unwrap().recv();
             if let Ok(llm_out) =
                 Worker::handle_message(message, running_llm, Arc::clone(&handle), surreal_table)
+            // this function call moves message out of scope so the next thread
+            // can start recieving as soon as this is called
             {
-                running_llm = llm_out;
+                running_llm = llm_out; // this is a bit of a sneaky work around mutating the llm inside the message
             } else {
+                // if we reciever gets Err() then we want to gracefully shutdown
+                println!("disconnected; shutting down.");
                 break;
             }
         }
@@ -171,11 +214,16 @@ impl Worker {
     ) -> Result<LLM, ()> {
         match msg {
             Ok(s) => {
+                // the message we got is all good!
+                //  turn the raw String into the database_id and the input to the transformer
                 let contents = parser::parse_kafka_message(&mut &s[..]).unwrap();
                 let output = match llm.run(&contents.message, 500) {
                     Ok(s) => s,
                     Err(_) => "Error Generating output".to_string(),
                 };
+                // now we create a little async function where we write to the
+                // database and wait until that's finished before finishing up
+                // and getting ready for the next message
                 handle.block_on(async {
                     DB.update(Resource::from((surreal_table, contents.database_id)))
                         .merge(FurfilRequest { output })
@@ -184,14 +232,13 @@ impl Worker {
                 });
                 Ok(llm)
             }
-            Err(_) => {
-                println!("disconnected; shutting down.");
-                Err(())
-            }
+            Err(_) => Err(()), // not sure what would trigger this, maybe kafka recieving a bad message?
         }
     }
 }
 
+// this is a LOT of boilerplate, basically ignore. It's where all the LLM code is and
+// candle handles most of this
 #[allow(clippy::upper_case_acronyms)]
 pub struct LLM {
     model: ModelBase,
@@ -226,6 +273,8 @@ impl LLM {
         }
     }
 
+    // here we take the input, turn it into tokens, run the transformer on those tokens, with each new token getting added
+    // until we see some eos_token and then send whatever is generated
     pub fn run(&mut self, prompt: &str, sample_len: usize) -> Result<String, anyhow::Error> {
         use std::io::Write;
         let mut out: String = String::new();

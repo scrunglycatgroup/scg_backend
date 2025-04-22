@@ -14,6 +14,7 @@ use winnow::token::{take_until, take_while};
 /// ```
 /// /(?<database_id>\w+) (?<whatever_the_llms_total_input_is>.|\n|\r)+/g
 /// ```
+/// basically the first word is some database id that we will write to, the rest is whatever we are sent
 #[derive(Debug)]
 pub struct ParsedKafkaMessage {
     pub database_id: String,
@@ -28,10 +29,12 @@ impl std::str::FromStr for ParsedKafkaMessage {
     }
 }
 
+// get all the characters before the first space
 fn parse_database_id<'s>(input: &mut &'s str) -> WinnowResult<&'s str> {
     take_until(0.., " ").parse_next(input)
 }
 
+// run [`parse_database_id`] and whatever is left is the actual stuff we are going to send to the llm
 pub fn parse_kafka_message(input: &mut &str) -> WinnowResult<ParsedKafkaMessage> {
     let id = parse_database_id.parse_next(input)?;
     let out = ParsedKafkaMessage {
@@ -41,10 +44,9 @@ pub fn parse_kafka_message(input: &mut &str) -> WinnowResult<ParsedKafkaMessage>
     Ok(out)
 }
 
-/// Getting from the environment
+/// Taking variables from the environment (that's either .env or environment variables)
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum SetupVariableError {
     VarError(VarError),
     ParseError,
@@ -53,12 +55,15 @@ pub enum SetupVariableError {
 
 pub use SetupVariableError as SVErr;
 
+// Box<str> is a slightly faster String, as long as you don't mutate the str, we
+// will just read these values so it's easy to use this
+// Rc handles copying better and Arc does that across threads safely. we are just
+// referencing these afaik so Box will be just fine though if we do want to clone the data this should switch to a Arc
 type EnvVar = Box<str>;
-// technically should move over to Arc<str> or Box<str> (I think I will be Arc'ing the actual struct so Arc is better)
 pub struct EnvVars {
-    pub kafka: KafkaVars,
-    pub surreal: SurrealVars,
-    pub lazy_load: bool,
+    pub kafka: KafkaVars,     // stuff we need for kafka
+    pub surreal: SurrealVars, // stuff we need for the db
+    pub lazy_load: bool, // if we want to load the llm threads at the start or wait until our first message
 }
 pub struct SurrealVars {
     pub surreal_host: EnvVar,      // SURREAL_HOST
@@ -71,18 +76,19 @@ pub struct SurrealVars {
 }
 
 pub struct KafkaVars {
-    pub kafka_host: EnvVar,          // KAFKA_HOST
-    pub kafka_port: EnvVar,          // KAFKA_PORT
+    pub kafka_host: EnvVar, // KAFKA_HOST
+    pub kafka_port: EnvVar, // KAFKA_PORT
+    // this is a collection of strings (or Box<str> to be exact)
     pub kafka_topics: Box<[EnvVar]>, // KAFKA_TOPICS
     pub kafka_group_id: EnvVar,      // KAFKA_GROUP_ID
     pub kafka_timeout: EnvVar,       // KAFKA_TIMEOUT
 }
 
-// Here is where we handle reading environment variables for everything
-//
+// Read environment variables and send them back
 pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
     dotenv().ok();
     let args: Vec<_> = env::args().collect();
+    // check if they have started with -h in which case give them some info and safely quit out
     if args.contains(&"-h".to_string()) || args.contains(&"--help".to_string()) {
         println!(
             r"
@@ -110,6 +116,7 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
         );
         return Err(SetupVariableError::AskedHelp);
     }
+    // is there a variable called LAZY_LOAD and if so is it something we can read as either true of false
     let lazy_load_var = var("LAZY_LOAD").map_err(SVErr::VarError)?;
     let lazy_load = parse_bool(&mut &lazy_load_var[..]).map_err(|_| SVErr::ParseError)?;
     Ok(EnvVars {
@@ -122,18 +129,19 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
 /// This checks for all the kafka environment variables, if it can't find any it *NEEDS* then it will error out
 /// If any supplied are malformed then it will error out
 fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
+    // for each environment variable we check if it exists and then if it looks valid
     let hostname_var = var("KAFKA_HOST").map_err(SVErr::VarError)?;
     let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| SVErr::ParseError)?;
     let port_var = var("KAFKA_PORT").map_err(SVErr::VarError)?;
     let port = test_port(&mut &port_var[..]).map_err(|_| SVErr::ParseError)?;
     let topics_var = var("KAFKA_TOPICS").map_err(SVErr::VarError)?;
-    let topics: Box<[EnvVar]> = (parse_topics(&mut &topics_var[..])
+    let topics: Box<[EnvVar]> = (parse_topics(&mut &topics_var[..]) // this is a little messy but just collects up the data we need
         .map_err(|_| SVErr::ParseError)?)
     .iter()
     .map(|v| ((*v).to_string()).into_boxed_str())
     .collect();
     let group_id_var = var("KAFKA_GROUP_ID").map_err(SVErr::VarError)?;
-    let timeout_var = var("KAFKA_TIMEOUT").unwrap_or("60000".to_string());
+    let timeout_var = var("KAFKA_TIMEOUT").unwrap_or("60000".to_string()); // if we don't get timeout then set to 60000
     let timeout = test_timeout(&mut &timeout_var[..]).map_err(|_| SVErr::ParseError)?;
 
     Ok(KafkaVars {
@@ -146,6 +154,7 @@ fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
 }
 
 fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
+    // same as above
     let hostname_var = var("SURREAL_HOST").map_err(SVErr::VarError)?;
     let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| SVErr::ParseError)?;
     let port_var = var("SURREAL_PORT").map_err(SVErr::VarError)?;
@@ -167,16 +176,19 @@ fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
     })
 }
 
+// valid hostnames are either some ipv4 (192.168.0.1) or "localhost"
 fn test_hostname<'i>(hostname: &mut &'i str) -> Result<&'i str, anyhow::Error> {
     alt((test_ip.take(), "localhost"))
         .parse(hostname)
         .map_err(|e| anyhow::format_err!("{e}"))
 }
 
+// check if ipv4 is valid
 fn test_ip(input: &mut &str) -> WinnowResult<()> {
     separated(1..=4, test_ip_byte, '.').parse_next(input)
 }
 
+// can't have ipv4 bytes above 255!
 fn test_ip_byte<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     digit1
         .parse_to::<u32>()
@@ -186,6 +198,7 @@ fn test_ip_byte<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     Ok(input)
 }
 
+// is the port in the valid range
 fn test_port<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     digit1
         .parse_to::<u32>()
@@ -198,16 +211,19 @@ fn test_timeout<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     digit1.parse_to::<u32>().take().parse_next(input)
 }
 
+// comma separated list of words
 fn parse_topics<'i>(input: &mut &'i str) -> Result<Vec<&'i str>, anyhow::Error> {
     separated(1.., topic_parser, ',')
         .parse(input)
         .map_err(|e| anyhow::format_err!("{e}"))
 }
 
+// a word is just some number of alphanumerics with _'s allowed
 fn topic_parser<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     take_while(1.., ('_', '0'..='9', 'a'..='z', 'A'..='Z')).parse_next(input)
 }
 
+// bool just checks if the first letter is t or f and returns true or false respectively
 fn parse_bool(input: &mut &str) -> Result<bool, anyhow::Error> {
     let true_opt: Option<char> = opt(parse_t)
         .parse_next(input)
@@ -221,9 +237,9 @@ fn parse_bool(input: &mut &str) -> Result<bool, anyhow::Error> {
     if false_opt.is_some() {
         return Ok(false);
     }
-    return Err(anyhow::format_err!(
+    Err(anyhow::format_err!(
         "None of f, F, False, false, t, T, True, true found",
-    ));
+    ))
 }
 
 fn parse_t(input: &mut &str) -> WinnowResult<char> {
@@ -234,6 +250,7 @@ fn parse_f(input: &mut &str) -> WinnowResult<char> {
     alt(('f', 'F')).parse_next(input)
 }
 
+// test driven development is good, I should do it more
 #[cfg(test)]
 mod test {
     use super::*;
