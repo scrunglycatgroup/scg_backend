@@ -7,6 +7,7 @@ use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM 
 use hf_hub::api::sync::Api;
 use hf_hub::{Repo, RepoType};
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc::RecvError;
 use std::{
     sync::{
         Arc, Mutex,
@@ -36,6 +37,7 @@ impl LLMPool {
                 Arc::clone(&rx),
                 Arc::clone(&handle),
                 env_vars.surreal.surreal_table.to_string().clone(),
+                env_vars.lazy_load,
             ));
         }
 
@@ -80,10 +82,26 @@ struct FurfilRequest {
 }
 
 impl Worker {
-    pub fn new(id: usize, recv: WorkerRecv, handle: Arc<Handle>, db_table: String) -> Worker {
+    pub fn new(
+        id: usize,
+        recv: WorkerRecv,
+        handle: Arc<Handle>,
+        db_table: String,
+        lazy_load: bool,
+    ) -> Worker {
         let thread = thread::spawn(move || {
-            let llm = Worker::spool_llm().unwrap();
-            Worker::run(llm, &recv, handle, &db_table)
+            if lazy_load {
+                let message = recv.lock().unwrap().recv();
+                let llm = Worker::spool_llm().unwrap();
+                if let Ok(llm_out) =
+                    Worker::handle_message(message, llm, Arc::clone(&handle), &db_table)
+                {
+                    Worker::run(llm_out, &recv, handle, &db_table)
+                }
+            } else {
+                let llm = Worker::spool_llm().unwrap();
+                Worker::run(llm, &recv, handle, &db_table)
+            }
         });
         Worker {
             id,
@@ -131,28 +149,44 @@ impl Worker {
         ))
     }
 
-    fn run(mut llm: LLM, reciever: &WorkerRecv, handle: Arc<Handle>, surreal_table: &String) {
+    fn run(llm: LLM, reciever: &WorkerRecv, handle: Arc<Handle>, surreal_table: &String) {
+        let mut running_llm = llm;
         loop {
             let message = reciever.lock().unwrap().recv();
+            if let Ok(llm_out) =
+                Worker::handle_message(message, running_llm, Arc::clone(&handle), surreal_table)
+            {
+                running_llm = llm_out;
+            } else {
+                break;
+            }
+        }
+    }
 
-            match message {
-                Ok(s) => {
-                    let contents = parser::parse_kafka_message(&mut &s[..]).unwrap();
-                    let output = match llm.run(&contents.message, 500) {
-                        Ok(s) => s,
-                        Err(_) => "Error Generating output".to_string(),
-                    };
-                    handle.block_on(async {
-                        DB.update(Resource::from((surreal_table, contents.database_id)))
-                            .merge(FurfilRequest { output })
-                            .await
-                            .unwrap();
-                    })
-                }
-                Err(_) => {
-                    println!("disconnected; shutting down.");
-                    break;
-                }
+    fn handle_message(
+        msg: Result<String, RecvError>,
+        mut llm: LLM,
+        handle: Arc<Handle>,
+        surreal_table: &String,
+    ) -> Result<LLM, ()> {
+        match msg {
+            Ok(s) => {
+                let contents = parser::parse_kafka_message(&mut &s[..]).unwrap();
+                let output = match llm.run(&contents.message, 500) {
+                    Ok(s) => s,
+                    Err(_) => "Error Generating output".to_string(),
+                };
+                handle.block_on(async {
+                    DB.update(Resource::from((surreal_table, contents.database_id)))
+                        .merge(FurfilRequest { output })
+                        .await
+                        .unwrap();
+                });
+                Ok(llm)
+            }
+            Err(_) => {
+                println!("disconnected; shutting down.");
+                Err(())
             }
         }
     }

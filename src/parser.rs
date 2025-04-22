@@ -6,7 +6,7 @@ use dotenv::dotenv;
 
 use winnow::Result as WinnowResult;
 use winnow::ascii::digit1;
-use winnow::combinator::{alt, separated};
+use winnow::combinator::{alt, opt, separated};
 use winnow::prelude::*;
 use winnow::token::{take_until, take_while};
 
@@ -58,6 +58,7 @@ type EnvVar = Box<str>;
 pub struct EnvVars {
     pub kafka: KafkaVars,
     pub surreal: SurrealVars,
+    pub lazy_load: bool,
 }
 pub struct SurrealVars {
     pub surreal_host: EnvVar,      // SURREAL_HOST
@@ -101,13 +102,20 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
 | KAFKA_TOPICS        : A comma separated list (no spaces) of topics it will listen to  | 
 | KAFKA_GROUP_ID      : The name of the group this shard will sign in as                | 
 | KAFKA_TIMEOUT       : The length of the timeout to kafka                              | 
+|                                                                                       | 
+| LAZY_LOAD           : (bool) If the locally run LLMs should be loaded at program start|
+|                        or when called, best used for running locally or testing       |
+|                                                                                       | 
 \=======================================================================================/"
         );
         return Err(SetupVariableError::AskedHelp);
     }
+    let lazy_load_var = var("LAZY_LOAD").map_err(SVErr::VarError)?;
+    let lazy_load = parse_bool(&mut &lazy_load_var[..]).map_err(|_| SVErr::ParseError)?;
     Ok(EnvVars {
         kafka: parse_kafka_env_vars()?,
         surreal: parse_surreal_env_vars()?,
+        lazy_load,
     })
 }
 
@@ -200,6 +208,32 @@ fn topic_parser<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     take_while(1.., ('_', '0'..='9', 'a'..='z', 'A'..='Z')).parse_next(input)
 }
 
+fn parse_bool(input: &mut &str) -> Result<bool, anyhow::Error> {
+    let true_opt: Option<char> = opt(parse_t)
+        .parse_next(input)
+        .map_err(|e| anyhow::format_err!("{e}"))?;
+    if true_opt.is_some() {
+        return Ok(true);
+    }
+    let false_opt = opt(parse_f)
+        .parse_next(input)
+        .map_err(|e| anyhow::format_err!("{e}"))?;
+    if false_opt.is_some() {
+        return Ok(false);
+    }
+    return Err(anyhow::format_err!(
+        "None of f, F, False, false, t, T, True, true found",
+    ));
+}
+
+fn parse_t(input: &mut &str) -> WinnowResult<char> {
+    alt(('t', 'T')).parse_next(input)
+}
+
+fn parse_f(input: &mut &str) -> WinnowResult<char> {
+    alt(('f', 'F')).parse_next(input)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -256,5 +290,27 @@ mod test {
 
         let mut post_comma_topic = "a_topic,";
         assert!(parse_topics(&mut post_comma_topic).is_err());
+    }
+
+    #[test]
+    fn parse_bool_base_case() {
+        let true_case: Vec<String> = vec![
+            "True".to_string(),
+            "t".to_string(),
+            "T".to_string(),
+            "true".to_string(),
+        ];
+        for case in true_case {
+            assert!(parse_bool(&mut &case[..]).is_ok_and(|v| v));
+        }
+        let false_case: Vec<String> = vec![
+            "False".to_string(),
+            "f".to_string(),
+            "F".to_string(),
+            "false".to_string(),
+        ];
+        for case in false_case {
+            assert!(parse_bool(&mut &case[..]).is_ok_and(|v| !v));
+        }
     }
 }
