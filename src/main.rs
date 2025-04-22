@@ -28,6 +28,11 @@ impl ClientContext for KafkaClientContext {}
 
 impl ConsumerContext for KafkaClientContext {}
 
+/// .
+///
+/// # Panics
+///
+/// Panics if connecting to kafka fails, the topics might not have been created, so make sure the python app has been started first
 // This is the main loop for getting jobs and sending them off to the pool
 pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
     let context = KafkaClientContext;
@@ -46,7 +51,7 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
             .expect("consumer creation failed");
 
     // connect to all the topics and listen to all of them
-    let topics: Vec<&str> = vars.kafka_topics.iter().map(|v| v.as_ref()).collect();
+    let topics: Vec<&str> = vars.kafka_topics.iter().map(AsRef::as_ref).collect();
     consumer
         .subscribe(&topics)
         .expect("Could not subscribe to topics");
@@ -54,7 +59,7 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
     loop {
         match consumer.recv().await {
             // we have recieved a message
-            Err(e) => println!("Error recieving message: {:?}", e),
+            Err(e) => println!("Error recieving message: {e:?}"),
             Ok(m) => {
                 match m.payload_view::<str>() {
                     Some(Ok(s)) => {
@@ -63,7 +68,7 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
                     }
                     Some(Err(e)) => {
                         // kafka sent us something wrong
-                        println!("Error deserializing message: {:?}", e);
+                        println!("Error deserializing message: {e:?}");
                     }
                     None => {}
                 };
@@ -95,7 +100,7 @@ async fn setup_db(env_vars: &SurrealVars) -> surrealdb::Result<()> {
     Ok(())
 }
 
-fn main() -> Result<(), ()> {
+fn main() {
     // Entry point to the application
     let env_vars = match read_environment_vars() {
         // Here we read all the environment varaibles if we are missing any or
@@ -103,7 +108,7 @@ fn main() -> Result<(), ()> {
         Ok(v) => v,
         Err(SetupVariableError::AskedHelp) => {
             // If they passed -h we give them the -h text and exit out
-            return Ok(());
+            return;
         }
         Err(SetupVariableError::ParseError) => {
             panic!("Error parsing environment variables, please check them") // TODO: more on this 
@@ -120,7 +125,7 @@ fn main() -> Result<(), ()> {
     // We wrap up this runtime handle so we can pass it around easily to the threads
     let rt_handle = Arc::new(rt.handle().clone());
     // create the threadpool the LLMs will run on
-    let pool = LLMPool::new(1, Arc::clone(&rt_handle), &env_vars);
+    let pool = LLMPool::new(1, &Arc::clone(&rt_handle), &env_vars);
 
     // now we have the threadpool (and they are spooling up )
     // we can connect to the database and kafka stream and start taking input
@@ -132,5 +137,4 @@ fn main() -> Result<(), ()> {
     });
 
     // exit out entirely
-    Ok(())
 }

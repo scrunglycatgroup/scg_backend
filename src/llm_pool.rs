@@ -43,7 +43,7 @@ impl LLMPool {
     // it isn't the same as __init__. https://www.youtube.com/watch?v=KWB-gDVuy_I
     // exlpains why this is better, but tldr: creation factories stop you from
     // reading from an object before it is ready
-    pub fn new(size: usize, handle: Arc<Handle>, env_vars: &EnvVars) -> LLMPool {
+    pub fn new(size: usize, handle: &Arc<Handle>, env_vars: &EnvVars) -> LLMPool {
         let (tx, rx) = channel();
         let rx = Arc::new(Mutex::new(rx)); // here we create a message pipe,
         // each worker gets a copy of the receiver and each one will try and `lock`
@@ -56,7 +56,7 @@ impl LLMPool {
                 // create a new thread we will hold onto
                 id,
                 Arc::clone(&rx),
-                Arc::clone(&handle),
+                Arc::clone(handle),
                 env_vars.surreal.surreal_table.to_string().clone(),
                 env_vars.lazy_load,
             ));
@@ -130,14 +130,14 @@ impl Worker {
                 let message = recv.lock().unwrap().recv();
                 let llm = Worker::spool_llm().unwrap();
                 if let Ok(llm_out) =
-                    Worker::handle_message(message, llm, Arc::clone(&handle), &db_table)
+                    Worker::handle_message(message, llm, &Arc::clone(&handle), &db_table)
                 {
-                    Worker::run(llm_out, &recv, handle, &db_table)
+                    Worker::run(llm_out, &recv, &handle, &db_table);
                 }
             } else {
                 // we aren't lazy loading so every thread starts spooling up immediately
                 let llm = Worker::spool_llm().unwrap();
-                Worker::run(llm, &recv, handle, &db_table)
+                Worker::run(llm, &recv, &handle, &db_table);
             }
         });
         Worker {
@@ -188,12 +188,12 @@ impl Worker {
     }
 
     // this is the main loop of each thread, it waits for a message, and then runs the LLM when it recieves one
-    fn run(llm: LLM, reciever: &WorkerRecv, handle: Arc<Handle>, surreal_table: &String) {
+    fn run(llm: LLM, reciever: &WorkerRecv, handle: &Arc<Handle>, surreal_table: &String) {
         let mut running_llm = llm;
         loop {
             let message = reciever.lock().unwrap().recv();
             if let Ok(llm_out) =
-                Worker::handle_message(message, running_llm, Arc::clone(&handle), surreal_table)
+                Worker::handle_message(message, running_llm, &Arc::clone(handle), surreal_table)
             // this function call moves message out of scope so the next thread
             // can start recieving as soon as this is called
             {
@@ -209,7 +209,7 @@ impl Worker {
     fn handle_message(
         msg: Result<String, RecvError>,
         mut llm: LLM,
-        handle: Arc<Handle>,
+        handle: &Arc<Handle>,
         surreal_table: &String,
     ) -> Result<LLM, ()> {
         match msg {
@@ -275,6 +275,7 @@ impl LLM {
 
     // here we take the input, turn it into tokens, run the transformer on those tokens, with each new token getting added
     // until we see some eos_token and then send whatever is generated
+    #[allow(clippy::cast_precision_loss)]
     pub fn run(&mut self, prompt: &str, sample_len: usize) -> Result<String, anyhow::Error> {
         use std::io::Write;
         let mut out: String = String::new();
@@ -286,16 +287,15 @@ impl LLM {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
-        for &t in tokens.iter() {
+        for &t in &tokens {
             if let Some(t) = self.tokenizer.next_token(t)? {
                 print!("{t}");
             }
         }
         std::io::stdout().flush()?;
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
-            Some(token) => token,
-            None => anyhow::bail!("cannot find the <|endoftext|> token"),
+        let Some(eos_token) = self.tokenizer.get_token("<|endoftext|>") else {
+            anyhow::bail!("cannot find the <|endoftext|> token")
         };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
@@ -305,7 +305,8 @@ impl LLM {
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, start_pos)?;
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-            let logits = if self.repeat_penalty == 1. {
+            let logits = if (self.repeat_penalty - 1.).abs() < 0.01 {
+                // error margin for dealing with f32s
                 logits
             } else {
                 let start_at = tokens.len().saturating_sub(self.repeat_last_n);

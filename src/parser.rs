@@ -39,7 +39,7 @@ pub fn parse_kafka_message(input: &mut &str) -> WinnowResult<ParsedKafkaMessage>
     let id = parse_database_id.parse_next(input)?;
     let out = ParsedKafkaMessage {
         database_id: id.to_string(),
-        message: input.to_string(),
+        message: (**input).to_string(),
     };
     Ok(out)
 }
@@ -60,11 +60,13 @@ pub use SetupVariableError as SVErr;
 // Rc handles copying better and Arc does that across threads safely. we are just
 // referencing these afaik so Box will be just fine though if we do want to clone the data this should switch to a Arc
 type EnvVar = Box<str>;
+#[allow(clippy::struct_field_names)]
 pub struct EnvVars {
     pub kafka: KafkaVars,     // stuff we need for kafka
     pub surreal: SurrealVars, // stuff we need for the db
     pub lazy_load: bool, // if we want to load the llm threads at the start or wait until our first message
 }
+#[allow(clippy::struct_field_names)]
 pub struct SurrealVars {
     pub surreal_host: EnvVar,      // SURREAL_HOST
     pub surreal_port: EnvVar,      // SURREAL_PORT
@@ -75,6 +77,7 @@ pub struct SurrealVars {
     pub surreal_table: EnvVar,     // SURREAL_TABLE
 }
 
+#[allow(clippy::struct_field_names)]
 pub struct KafkaVars {
     pub kafka_host: EnvVar, // KAFKA_HOST
     pub kafka_port: EnvVar, // KAFKA_PORT
@@ -202,7 +205,7 @@ fn test_ip_byte<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
 fn test_port<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     digit1
         .parse_to::<u32>()
-        .verify(|i: &u32| *i < (u16::MAX as u32))
+        .verify(|i: &u32| *i < (<u32>::from(u16::MAX)))
         .take()
         .parse_next(input)
 }
