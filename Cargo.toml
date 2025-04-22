@@ -1,5 +1,5 @@
 [package]
-name = "scg_b_rust_dispatcher"
+name = "rust-llm-dispatcher"
 version = "0.1.0"
 edition = "2024"
 

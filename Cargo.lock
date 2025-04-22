@@ -3790,6 +3790,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-llm-dispatcher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "candle-examples",
+ "candle-nn",
+ "candle-transformers",
+ "dotenv",
+ "hf-hub",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "surrealdb",
+ "tokenizers",
+ "tokio",
+ "winnow",
+]
+
+[[package]]
 name = "rust-stemmers"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3940,26 +3960,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scg_b_rust_dispatcher"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "candle-core",
- "candle-examples",
- "candle-nn",
- "candle-transformers",
- "dotenv",
- "hf-hub",
- "rdkafka",
- "serde",
- "serde_json",
- "surrealdb",
- "tokenizers",
- "tokio",
- "winnow",
 ]
 
 [[package]]
