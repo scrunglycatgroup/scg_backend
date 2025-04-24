@@ -25,6 +25,9 @@ use std::{
     thread,
 };
 
+/// Logging
+use log::{debug, error, info, trace};
+
 use surrealdb::opt::Resource;
 
 use tokio::runtime::Handle;
@@ -52,6 +55,7 @@ impl LLMPool {
 
         let mut workers = Vec::with_capacity(size);
         for id in 0..size {
+            debug!("Create worker {id}");
             workers.push(Worker::new(
                 // create a new thread we will hold onto
                 id,
@@ -71,6 +75,7 @@ impl LLMPool {
     // when this is called we send something to the receiver, whichever thread
     // has the lock will take the String and then do whatever it needs to with it.
     pub fn execute(&self, job: String) {
+        trace!("Job sent to the llm pool");
         self.sender.as_ref().unwrap().send(job).unwrap();
     }
 }
@@ -78,10 +83,11 @@ impl LLMPool {
 // When we are done with LLMPool we need to shut down all the threads
 impl Drop for LLMPool {
     fn drop(&mut self) {
+        trace!("Dropping the pool messager, all threads should start closing down");
         drop(self.sender.take()); // we drop the sender which sends each thread
         // an Err(_) where in the main loop we close on recieving one
         for worker in &mut self.workers {
-            println!("Shutting down workers {}", worker.id);
+            trace!("Shutting down workers {}", worker.id);
             if let Some(thread) = worker.thread.take() {
                 thread.join().unwrap();
                 // once threads have finished running their code join will close them
@@ -123,21 +129,26 @@ impl Worker {
         // note all this code isn't run before we actually construct the Worker,
         // simply this thread variable creates a new sub-process that will run all of the code inside the `{}` in a seperate thread!
         // Because of thread safety reasons we need to pass certain things as references
+        trace!("spawning thread");
         let thread = thread::spawn(move || {
             if lazy_load {
+                trace!("Lazy loading llm for {id}");
                 // if we are lazy loading we wait until recieving the first message before starting everything
                 // from then on we just loop like usual
                 let message = recv.lock().unwrap().recv();
+                trace!("lazy loading llm thread {id} has received it's first message, loading llm");
                 let llm = Worker::spool_llm().unwrap();
+                info!("llm loaded now running it");
                 if let Ok(llm_out) =
                     Worker::handle_message(message, llm, &Arc::clone(&handle), &db_table)
                 {
-                    Worker::run(llm_out, &recv, &handle, &db_table);
+                    Worker::run(id, llm_out, &recv, &handle, &db_table);
                 }
             } else {
                 // we aren't lazy loading so every thread starts spooling up immediately
+                trace!("No lazy loading so llm spooling before listening for messages");
                 let llm = Worker::spool_llm().unwrap();
-                Worker::run(llm, &recv, &handle, &db_table);
+                Worker::run(id, llm, &recv, &handle, &db_table);
             }
         });
         Worker {
@@ -173,7 +184,7 @@ impl Worker {
                     .map_err(|_| ())?;
             ModelBase::new(&config, vb.map_err(|_| ())?).map_err(|_| ())?
         };
-        println!("loaded the model in {:?}", start.elapsed());
+        info!("loaded the model in {:?}", start.elapsed());
 
         Ok(LLM::new(
             model,     // the model we are using
@@ -188,10 +199,17 @@ impl Worker {
     }
 
     // this is the main loop of each thread, it waits for a message, and then runs the LLM when it recieves one
-    fn run(llm: LLM, reciever: &WorkerRecv, handle: &Arc<Handle>, surreal_table: &String) {
+    fn run(
+        id: usize,
+        llm: LLM,
+        reciever: &WorkerRecv,
+        handle: &Arc<Handle>,
+        surreal_table: &String,
+    ) {
         let mut running_llm = llm;
         loop {
             let message = reciever.lock().unwrap().recv();
+            trace!("Message received on thread {id} running llm");
             if let Ok(llm_out) =
                 Worker::handle_message(message, running_llm, &Arc::clone(handle), surreal_table)
             // this function call moves message out of scope so the next thread
@@ -200,7 +218,7 @@ impl Worker {
                 running_llm = llm_out; // this is a bit of a sneaky work around mutating the llm inside the message
             } else {
                 // if we reciever gets Err() then we want to gracefully shutdown
-                println!("disconnected; shutting down.");
+                info!("{id} disconnected; shutting down.");
                 break;
             }
         }
@@ -217,14 +235,18 @@ impl Worker {
                 // the message we got is all good!
                 //  turn the raw String into the database_id and the input to the transformer
                 let contents = parser::parse_kafka_message(&mut &s[..]).unwrap();
-                let output = match llm.run(&contents.message, 500) {
-                    Ok(s) => s,
-                    Err(_) => "Error Generating output".to_string(),
+                trace!("Split kafka message into database id and request");
+                let output = if let Ok(s) = llm.run(&contents.message, 500) {
+                    s
+                } else {
+                    error!("Something went wrong generating an output (check llm.run())");
+                    "Error Generating output".to_string()
                 };
                 // now we create a little async function where we write to the
                 // database and wait until that's finished before finishing up
                 // and getting ready for the next message
                 handle.block_on(async {
+                    trace!("Writing output to database");
                     DB.update(Resource::from((surreal_table, contents.database_id)))
                         .merge(FurfilRequest { output })
                         .await
@@ -232,7 +254,10 @@ impl Worker {
                 });
                 Ok(llm)
             }
-            Err(_) => Err(()), // not sure what would trigger this, maybe kafka recieving a bad message?
+            Err(_) => {
+                error!("Kafka sent a bad message, check connection");
+                Err(())
+            } // not sure what would trigger this, maybe kafka recieving a bad message?
         }
     }
 }
@@ -277,7 +302,6 @@ impl LLM {
     // until we see some eos_token and then send whatever is generated
     #[allow(clippy::cast_precision_loss)]
     pub fn run(&mut self, prompt: &str, sample_len: usize) -> Result<String, anyhow::Error> {
-        use std::io::Write;
         let mut out: String = String::new();
         self.tokenizer.clear();
         let mut tokens = self
@@ -287,12 +311,6 @@ impl LLM {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
-        for &t in &tokens {
-            if let Some(t) = self.tokenizer.next_token(t)? {
-                print!("{t}");
-            }
-        }
-        std::io::stdout().flush()?;
         let mut generated_tokens = 0usize;
         let Some(eos_token) = self.tokenizer.get_token("<|endoftext|>") else {
             anyhow::bail!("cannot find the <|endoftext|> token")
@@ -323,19 +341,15 @@ impl LLM {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
-                print!("{t}");
                 out.push_str(&t);
-                std::io::stdout().flush()?;
             }
         }
         let dt = start_gen.elapsed();
         if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
-            print!("{rest}");
             out.push_str(&rest);
         }
-        std::io::stdout().flush()?;
-        println!(
-            "\n{generated_tokens} tokens generated ({:.2} tokens/s)",
+        info!(
+            "{generated_tokens} tokens generated ({:.2} tokens/s)",
             generated_tokens as f64 / dt.as_secs_f64(),
         );
 

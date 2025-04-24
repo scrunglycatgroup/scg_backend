@@ -1,5 +1,3 @@
-use llm_pool::LLMPool;
-use parser::{KafkaVars, SetupVariableError, SurrealVars, read_environment_vars};
 /// Kafka imports
 use rdkafka::Message;
 use rdkafka::client::ClientContext;
@@ -15,8 +13,14 @@ use tokio::runtime::Runtime;
 /// std imports
 use std::sync::{Arc, LazyLock};
 
+/// Logging
+use log::{debug, error, info, trace};
+
 mod llm_pool; // our custom stuff
 mod parser;
+
+use llm_pool::LLMPool;
+use parser::{KafkaVars, SetupVariableError, SurrealVars, read_environment_vars};
 
 // This is an application wide (global) lock on the database
 static DB: LazyLock<Surreal<Client>> = LazyLock::new(Surreal::init);
@@ -37,6 +41,7 @@ impl ConsumerContext for KafkaClientContext {}
 pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
     let context = KafkaClientContext;
 
+    info!("Connecting to kafka");
     let consumer: StreamConsumer<KafkaClientContext> =
         ClientConfig::new() // here we connect to the kafka stream with all the variables we need to
             .set("group.id", vars.kafka_group_id.to_string())
@@ -52,6 +57,7 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
 
     // connect to all the topics and listen to all of them
     let topics: Vec<&str> = vars.kafka_topics.iter().map(AsRef::as_ref).collect();
+    info!("Subscribing to kafka topics");
     consumer
         .subscribe(&topics)
         .expect("Could not subscribe to topics");
@@ -59,8 +65,9 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
     loop {
         match consumer.recv().await {
             // we have recieved a message
-            Err(e) => println!("Error recieving message: {e:?}"),
+            Err(e) => error!("Error recieving message: {e:?}"),
             Ok(m) => {
+                trace!("Messages recieved, starting to run them");
                 match m.payload_view::<str>() {
                     Some(Ok(s)) => {
                         // if the message is a string we send it to the LLM
@@ -68,14 +75,15 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
                     }
                     Some(Err(e)) => {
                         // kafka sent us something wrong
-                        println!("Error deserializing message: {e:?}");
+                        error!("Error deserializing message: {e:?}");
                     }
                     None => {}
-                };
+                }
                 // we tell the kafka server we have dealt with all the messages we were given
                 consumer
                     .commit_message(&m, rdkafka::consumer::CommitMode::Async)
                     .unwrap();
+                trace!("kafka messages committed, ready for next batch");
             }
         }
     }
@@ -84,6 +92,7 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
 /// Connect to the database with the variables passed to it
 async fn setup_db(env_vars: &SurrealVars) -> surrealdb::Result<()> {
     // Ws is a websocket connection (allows for better callback and is recomended mode)
+    trace!("starting connection to server");
     DB.connect::<Ws>(format!(
         "{}:{}",
         env_vars.surreal_host, env_vars.surreal_port
@@ -94,14 +103,18 @@ async fn setup_db(env_vars: &SurrealVars) -> surrealdb::Result<()> {
         password: &format!("{}", env_vars.surreal_pass),
     })
     .await?;
+    debug!("Signed in to database");
     DB.use_ns((*env_vars.surreal_namespace).to_string())
         .use_db((*env_vars.surreal_database).to_string())
         .await?;
+    trace!("Connected to the database fully");
     Ok(())
 }
 
 fn main() {
+    env_logger::init();
     // Entry point to the application
+    info!("LLM dispatcher booting");
     let env_vars = match read_environment_vars() {
         // Here we read all the environment varaibles if we are missing any or
         // some are broken we exit out
@@ -110,14 +123,15 @@ fn main() {
             // If they passed -h we give them the -h text and exit out
             return;
         }
-        Err(SetupVariableError::ParseError) => {
-            panic!("Error parsing environment variables, please check them") // TODO: more on this 
+        Err(SetupVariableError::ParseError(e)) => {
+            panic!("{e}") // TODO: more on this 
         }
         Err(SetupVariableError::VarError(e)) => {
             // They haven't given us an environment variable we need
             panic!("Error reading {e}")
         }
     };
+    trace!("environment variables parsed: {env_vars:?}");
     // tokio is an async package in rust, we use this to call the database functions inside
     // synchronous code
     let rt = Runtime::new().expect("Failed to create tokio runtime");
@@ -125,10 +139,12 @@ fn main() {
     // We wrap up this runtime handle so we can pass it around easily to the threads
     let rt_handle = Arc::new(rt.handle().clone());
     // create the threadpool the LLMs will run on
+    trace!("Start llm pool creation");
     let pool = LLMPool::new(1, &Arc::clone(&rt_handle), &env_vars);
 
     // now we have the threadpool (and they are spooling up )
     // we can connect to the database and kafka stream and start taking input
+
     rt_handle.block_on(async {
         // await runs the async function and stops this thread until it's finished
         // map_err takes our error output and changes it to whatever we want

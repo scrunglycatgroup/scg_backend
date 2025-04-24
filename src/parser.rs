@@ -10,6 +10,8 @@ use winnow::combinator::{alt, opt, separated};
 use winnow::prelude::*;
 use winnow::token::{take_until, take_while};
 
+// logging
+use log::{info, trace};
 /// Kafka sends us a single string at the moment, the regex for this being:
 /// ```
 /// /(?<database_id>\w+) (?<whatever_the_llms_total_input_is>.|\n|\r)+/g
@@ -49,7 +51,7 @@ pub fn parse_kafka_message(input: &mut &str) -> WinnowResult<ParsedKafkaMessage>
 #[derive(Debug)]
 pub enum SetupVariableError {
     VarError(VarError),
-    ParseError,
+    ParseError(String),
     AskedHelp, // the user asked for help, we shoud now gracefully exit
 }
 
@@ -61,12 +63,14 @@ pub use SetupVariableError as SVErr;
 // referencing these afaik so Box will be just fine though if we do want to clone the data this should switch to a Arc
 type EnvVar = Box<str>;
 #[allow(clippy::struct_field_names)]
+#[derive(Debug)]
 pub struct EnvVars {
     pub kafka: KafkaVars,     // stuff we need for kafka
     pub surreal: SurrealVars, // stuff we need for the db
     pub lazy_load: bool, // if we want to load the llm threads at the start or wait until our first message
 }
 #[allow(clippy::struct_field_names)]
+#[derive(Debug)]
 pub struct SurrealVars {
     pub surreal_host: EnvVar,      // SURREAL_HOST
     pub surreal_port: EnvVar,      // SURREAL_PORT
@@ -78,6 +82,7 @@ pub struct SurrealVars {
 }
 
 #[allow(clippy::struct_field_names)]
+#[derive(Debug)]
 pub struct KafkaVars {
     pub kafka_host: EnvVar, // KAFKA_HOST
     pub kafka_port: EnvVar, // KAFKA_PORT
@@ -89,10 +94,14 @@ pub struct KafkaVars {
 
 // Read environment variables and send them back
 pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
+    trace!("loaded info from .env into the environment");
     dotenv().ok();
     let args: Vec<_> = env::args().collect();
     // check if they have started with -h in which case give them some info and safely quit out
     if args.contains(&"-h".to_string()) || args.contains(&"--help".to_string()) {
+        info!(
+            "-h was included in the call, we should give the user some info and then close / stop"
+        );
         println!(
             r"
 /=======================================================================================\
@@ -121,7 +130,11 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
     }
     // is there a variable called LAZY_LOAD and if so is it something we can read as either true of false
     let lazy_load_var = var("LAZY_LOAD").map_err(SVErr::VarError)?;
-    let lazy_load = parse_bool(&mut &lazy_load_var[..]).map_err(|_| SVErr::ParseError)?;
+    let lazy_load = parse_bool(&mut &lazy_load_var[..]).map_err(|_| {
+        SVErr::ParseError(
+            "LAZY_LOAD couldn't be read as a bool, consider using true or false".to_string(),
+        )
+    })?;
     Ok(EnvVars {
         kafka: parse_kafka_env_vars()?,
         surreal: parse_surreal_env_vars()?,
@@ -134,18 +147,30 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
 fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
     // for each environment variable we check if it exists and then if it looks valid
     let hostname_var = var("KAFKA_HOST").map_err(SVErr::VarError)?;
-    let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| SVErr::ParseError)?;
+    let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| {
+        SVErr::ParseError(
+            "KAFKA_HOST couldn't be parsed, use either a valid ipv4 address or localhost"
+                .to_string(),
+        )
+    })?;
     let port_var = var("KAFKA_PORT").map_err(SVErr::VarError)?;
-    let port = test_port(&mut &port_var[..]).map_err(|_| SVErr::ParseError)?;
+    let port = test_port(&mut &port_var[..]).map_err(|_| {
+        SVErr::ParseError(format!(
+            "KAFKA_PORT could not be parsed, must be a number bellow {:}",
+            u16::MAX
+        ))
+    })?;
     let topics_var = var("KAFKA_TOPICS").map_err(SVErr::VarError)?;
     let topics: Box<[EnvVar]> = (parse_topics(&mut &topics_var[..]) // this is a little messy but just collects up the data we need
-        .map_err(|_| SVErr::ParseError)?)
+        .map_err(|_| SVErr::ParseError("KAFKA_TOPICS could not be parsed, must be a word (constructed out of some alphanumerics and _'s) or comma seperated list of words, make sure you don't have any trailing commas".to_string()))?)
     .iter()
     .map(|v| ((*v).to_string()).into_boxed_str())
     .collect();
     let group_id_var = var("KAFKA_GROUP_ID").map_err(SVErr::VarError)?;
     let timeout_var = var("KAFKA_TIMEOUT").unwrap_or("60000".to_string()); // if we don't get timeout then set to 60000
-    let timeout = test_timeout(&mut &timeout_var[..]).map_err(|_| SVErr::ParseError)?;
+    let timeout = test_timeout(&mut &timeout_var[..]).map_err(|_| {
+        SVErr::ParseError("KAFKA_TIMEOUT could not be parsed, must be a number".to_string())
+    })?;
 
     Ok(KafkaVars {
         kafka_host: hostname.into(),
@@ -159,9 +184,19 @@ fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
 fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
     // same as above
     let hostname_var = var("SURREAL_HOST").map_err(SVErr::VarError)?;
-    let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| SVErr::ParseError)?;
+    let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| {
+        SVErr::ParseError(
+            "SURREAL_HOST could not be parsed, please use a valid ipv4 address or localhost"
+                .to_string(),
+        )
+    })?;
     let port_var = var("SURREAL_PORT").map_err(SVErr::VarError)?;
-    let port = test_port(&mut &port_var[..]).map_err(|_| SVErr::ParseError)?;
+    let port = test_port(&mut &port_var[..]).map_err(|_| {
+        SVErr::ParseError(format!(
+            "SURREAL_PORT could not be parsed, please enter a number below {:}",
+            u16::MAX
+        ))
+    })?;
     let namespace_var = var("SURREAL_NAMESPACE").map_err(SVErr::VarError)?;
     let database_var = var("SURREAL_DATABASE").map_err(SVErr::VarError)?;
     let user_var = var("SURREAL_USER").map_err(SVErr::VarError)?;
