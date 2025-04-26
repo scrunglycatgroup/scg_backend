@@ -6,9 +6,9 @@ use dotenv::dotenv;
 
 use winnow::Result as WinnowResult;
 use winnow::ascii::digit1;
-use winnow::combinator::{alt, opt, separated};
+use winnow::combinator::{alt, opt, separated, separated_pair};
 use winnow::prelude::*;
-use winnow::token::{take_until, take_while};
+use winnow::token::{literal, take_until, take_while};
 
 // logging
 use log::{info, trace};
@@ -73,7 +73,6 @@ pub struct EnvVars {
 #[derive(Debug)]
 pub struct SurrealVars {
     pub surreal_host: EnvVar,      // SURREAL_HOST
-    pub surreal_port: EnvVar,      // SURREAL_PORT
     pub surreal_namespace: EnvVar, // SURREAL_NAMESPACE
     pub surreal_database: EnvVar,  // SURREAL_DATABASE
     pub surreal_user: EnvVar,      // SURREAL_USER
@@ -85,7 +84,6 @@ pub struct SurrealVars {
 #[derive(Debug)]
 pub struct KafkaVars {
     pub kafka_host: EnvVar, // KAFKA_HOST
-    pub kafka_port: EnvVar, // KAFKA_PORT
     // this is a collection of strings (or Box<str> to be exact)
     pub kafka_topics: Box<[EnvVar]>, // KAFKA_TOPICS
     pub kafka_group_id: EnvVar,      // KAFKA_GROUP_ID
@@ -107,8 +105,7 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
 /=======================================================================================\
 |          Environment Variables (can be in a .env)                                     | 
 |=======================================================================================| 
-| SURREAL_HOST        : The host ip for the surreal db (can take localhost)             | 
-| SURREAL_PORT        : The port the surreal db is exposed on                           | 
+| SURREAL_HOST        : The host ip for the surreal db (can take localhost) (comma sep) |  
 | SURREAL_NAMESPACE   : The namespace this shard will attach to on the surreal server   | 
 | SURREAL_DATABASE    : The database within the namespace this shard will attach to     | 
 | SURREAL_USER        : The username for the server                                     | 
@@ -116,7 +113,6 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
 | SURREAL_TABLE       : The table it will read and write to / from                      | 
 |                                                                                       | 
 | KAFKA_HOST          : The host ip for the kafka instance (can take localhost)         | 
-| KAFKA_PORT          : The port the kafka instance is exposed on                       | 
 | KAFKA_TOPICS        : A comma separated list (no spaces) of topics it will listen to  | 
 | KAFKA_GROUP_ID      : The name of the group this shard will sign in as                | 
 | KAFKA_TIMEOUT       : The length of the timeout to kafka                              | 
@@ -147,18 +143,11 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
 fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
     // for each environment variable we check if it exists and then if it looks valid
     let hostname_var = var("KAFKA_HOST").map_err(SVErr::VarError)?;
-    let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| {
+    let hostname = parse_hostname_set(&mut &hostname_var[..]).map_err(|_| {
         SVErr::ParseError(
-            "KAFKA_HOST couldn't be parsed, use either a valid ipv4 address or localhost"
+            "KAFKA_HOST couldn't be parsed, use either a valid ipv4 address or localhost along with valid ports, it should be a comma separated list"
                 .to_string(),
         )
-    })?;
-    let port_var = var("KAFKA_PORT").map_err(SVErr::VarError)?;
-    let port = test_port(&mut &port_var[..]).map_err(|_| {
-        SVErr::ParseError(format!(
-            "KAFKA_PORT could not be parsed, must be a number bellow {:}",
-            u16::MAX
-        ))
     })?;
     let topics_var = var("KAFKA_TOPICS").map_err(SVErr::VarError)?;
     let topics: Box<[EnvVar]> = (parse_topics(&mut &topics_var[..]) // this is a little messy but just collects up the data we need
@@ -174,7 +163,6 @@ fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
 
     Ok(KafkaVars {
         kafka_host: hostname.into(),
-        kafka_port: port.into(),
         kafka_topics: topics,
         kafka_group_id: group_id_var.into(),
         kafka_timeout: timeout.into(),
@@ -184,18 +172,11 @@ fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
 fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
     // same as above
     let hostname_var = var("SURREAL_HOST").map_err(SVErr::VarError)?;
-    let hostname = test_hostname(&mut &hostname_var[..]).map_err(|_| {
+    let hostname = parse_hostname(&mut &hostname_var[..]).map_err(|_| {
         SVErr::ParseError(
-            "SURREAL_HOST could not be parsed, please use a valid ipv4 address or localhost"
+            "SURREAL_HOST could not be parsed, please use a valid ipv4 address or localhost, or port, it should be a comma separated list"
                 .to_string(),
         )
-    })?;
-    let port_var = var("SURREAL_PORT").map_err(SVErr::VarError)?;
-    let port = test_port(&mut &port_var[..]).map_err(|_| {
-        SVErr::ParseError(format!(
-            "SURREAL_PORT could not be parsed, please enter a number below {:}",
-            u16::MAX
-        ))
     })?;
     let namespace_var = var("SURREAL_NAMESPACE").map_err(SVErr::VarError)?;
     let database_var = var("SURREAL_DATABASE").map_err(SVErr::VarError)?;
@@ -205,7 +186,6 @@ fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
 
     Ok(SurrealVars {
         surreal_host: hostname.into(),
-        surreal_port: port.into(),
         surreal_namespace: namespace_var.into(),
         surreal_database: database_var.into(),
         surreal_user: user_var.into(),
@@ -214,20 +194,45 @@ fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
     })
 }
 
-// valid hostnames are either some ipv4 (192.168.0.1) or "localhost"
-fn test_hostname<'i>(hostname: &mut &'i str) -> Result<&'i str, anyhow::Error> {
-    alt((test_ip.take(), "localhost"))
-        .parse(hostname)
-        .map_err(|e| anyhow::format_err!("{e}"))
+fn parse_hostname_set<'i>(hostname: &mut &'i str) -> WinnowResult<&'i str> {
+    Parser::take(separated::<_, _, (), _, _, _, _>(
+        ..,
+        parse_hostname_and_port,
+        ',',
+    ))
+    .parse_next(hostname)
+}
+
+fn parse_hostname_and_port<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
+    Parser::take(separated_pair(parse_hostname, ':', parse_port)).parse_next(input)
+}
+
+fn parse_hostname<'i>(hostname: &mut &'i str) -> WinnowResult<&'i str> {
+    Parser::take(alt((parse_ip, "localhost"))).parse_next(hostname)
 }
 
 // check if ipv4 is valid
-fn test_ip(input: &mut &str) -> WinnowResult<()> {
-    separated(1..=4, test_ip_byte, '.').parse_next(input)
+fn parse_ip<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
+    alt((parse_ip_quad, parse_ip_trip)).take().parse_next(input)
+}
+
+fn parse_ip_quad<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
+    Parser::take(separated::<_, _, (), _, _, _, _>(4, parse_ip_octet, '.')).parse_next(input)
+}
+
+fn parse_ip_trip<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
+    Parser::take((
+        parse_ip_octet,
+        '.',
+        parse_ip_octet,
+        '.',
+        parse_ip_double_octet,
+    ))
+    .parse_next(input)
 }
 
 // can't have ipv4 bytes above 255!
-fn test_ip_byte<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
+fn parse_ip_octet<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     digit1
         .parse_to::<u32>()
         .verify(|i: &u32| *i <= 255)
@@ -236,8 +241,16 @@ fn test_ip_byte<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     Ok(input)
 }
 
+fn parse_ip_double_octet<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
+    digit1
+        .parse_to::<u32>()
+        .verify(|i: &u32| *i <= 65_535)
+        .take()
+        .parse_next(input)
+}
+
 // is the port in the valid range
-fn test_port<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
+fn parse_port<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
     digit1
         .parse_to::<u32>()
         .verify(|i: &u32| *i < (<u32>::from(u16::MAX)))
@@ -291,6 +304,8 @@ fn parse_f(input: &mut &str) -> WinnowResult<char> {
 // test driven development is good, I should do it more
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use super::*;
 
     #[test]
@@ -303,24 +318,51 @@ mod test {
     }
 
     #[test]
-    fn parse_hostname_base_case() {
-        let mut hostname_local = "localhost"; // 3 types of hostnames we should accept 
-        let mut hostname_ipv4 = "192.168.0.3";
-        let mut hostname_ipv4_reduced = "192.168.3";
-        assert!(test_hostname(&mut hostname_local).is_ok_and(|v| v == "localhost"));
-        assert!(test_hostname(&mut hostname_ipv4).is_ok_and(|v| v == "192.168.0.3"));
-        assert!(test_hostname(&mut hostname_ipv4_reduced).is_ok_and(|v| v == "192.168.3"));
+    fn parsing_hostnames() {
+        let mut local = "localhost";
+        let local_parsed = parse_hostname(&mut local);
+        assert!(local_parsed.is_ok());
+        assert_eq!(local_parsed.unwrap(), "localhost");
+        let mut simple_ip = "192.168.0.4";
+        let simple_ip_parsed = parse_hostname(&mut simple_ip);
+        assert!(simple_ip_parsed.is_ok());
+        assert_eq!(simple_ip_parsed.unwrap(), "192.168.0.4");
+        let mut local = "localhost:8080";
+        let local_parsed = parse_hostname_and_port(&mut local);
+        assert!(local_parsed.is_ok());
+        assert_eq!(local_parsed.unwrap(), "localhost:8080");
+        let mut simple_ip = "192.168.0.4:3030";
+        let simple_ip_parsed = parse_hostname_and_port(&mut simple_ip);
+        assert!(simple_ip_parsed.is_ok());
+        assert_eq!(simple_ip_parsed.unwrap(), "192.168.0.4:3030");
 
-        assert!(test_hostname(&mut "256.773.3.1").is_err());
-        assert!(test_hostname(&mut "THIS ISN'T A VALID HOSTNAME").is_err());
+        let mut super_simple_test = "192.168.0.4:3030,localhost:8080,232.101.455:1234";
+        let super_simple_parsed = parse_hostname_set(&mut super_simple_test);
+        assert!(super_simple_parsed.is_ok());
+        assert_eq!(
+            super_simple_parsed.unwrap(),
+            "192.168.0.4:3030,localhost:8080,232.101.455:1234"
+        );
+    }
+
+    #[test]
+    fn parse_ips() {
+        let mut quad = "192.168.0.4";
+        let quad_parsed = parse_ip(&mut quad);
+        assert!(quad_parsed.is_ok());
+        assert_eq!(quad_parsed.unwrap(), "192.168.0.4");
+        let mut trip = "192.168.267";
+        let trip_parsed = parse_ip(&mut trip);
+        assert!(trip_parsed.is_ok());
+        assert_eq!(trip_parsed.unwrap(), "192.168.267");
     }
 
     #[test]
     fn parse_port_base_case() {
         let mut port_simple = "8080";
-        assert!(test_port(&mut port_simple).is_ok_and(|v| v == "8080"));
+        assert!(parse_port(&mut port_simple).is_ok_and(|v| v == "8080"));
         let mut wrong_port = "abc";
-        assert!(test_port(&mut wrong_port).is_err());
+        assert!(parse_port(&mut wrong_port).is_err());
     }
 
     #[test]

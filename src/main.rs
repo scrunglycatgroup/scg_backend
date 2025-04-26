@@ -45,10 +45,7 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
     let consumer: StreamConsumer<KafkaClientContext> =
         ClientConfig::new() // here we connect to the kafka stream with all the variables we need to
             .set("group.id", vars.kafka_group_id.to_string())
-            .set(
-                "bootstrap.servers",
-                format!("{}:{}", vars.kafka_host, vars.kafka_port),
-            )
+            .set("bootstrap.servers", format!("{}", vars.kafka_host,))
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", vars.kafka_timeout.to_string())
             .set("enable.auto.commit", "true")
@@ -93,11 +90,8 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
 async fn setup_db(env_vars: &SurrealVars) -> surrealdb::Result<()> {
     // Ws is a websocket connection (allows for better callback and is recomended mode)
     trace!("starting connection to server");
-    DB.connect::<Ws>(format!(
-        "{}:{}",
-        env_vars.surreal_host, env_vars.surreal_port
-    ))
-    .await?;
+    DB.connect::<Ws>(format!("{}", env_vars.surreal_host))
+        .await?;
     DB.signin(Root {
         username: &format!("{}", env_vars.surreal_user),
         password: &format!("{}", env_vars.surreal_pass),
