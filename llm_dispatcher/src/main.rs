@@ -6,7 +6,7 @@ use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
 
 /// surreal imports
 use surrealdb::Surreal;
-use surrealdb::engine::remote::ws::{Client, Ws};
+use surrealdb::engine::remote::ws::{Client, Wss};
 use surrealdb::opt::auth::Root;
 use tokio::runtime::Runtime;
 
@@ -45,7 +45,7 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
     let consumer: StreamConsumer<KafkaClientContext> =
         ClientConfig::new() // here we connect to the kafka stream with all the variables we need to
             .set("group.id", vars.kafka_group_id.to_string())
-            .set("bootstrap.servers", format!("{}", vars.kafka_host,))
+            .set("bootstrap.servers", format!("{}", vars.kafka_host))
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", vars.kafka_timeout.to_string())
             .set("enable.auto.commit", "true")
@@ -89,8 +89,8 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
 /// Connect to the database with the variables passed to it
 async fn setup_db(env_vars: &SurrealVars) -> surrealdb::Result<()> {
     // Ws is a websocket connection (allows for better callback and is recomended mode)
-    trace!("starting connection to server");
-    DB.connect::<Ws>(format!("{}", env_vars.surreal_host))
+    trace!("starting connection to database");
+    DB.connect::<Wss>(format!("{}", env_vars.surreal_host))
         .await?;
     DB.signin(Root {
         username: &format!("{}", env_vars.surreal_user),
@@ -120,9 +120,12 @@ fn main() {
         Err(SetupVariableError::ParseError(e)) => {
             panic!("{e}") // TODO: more on this 
         }
-        Err(SetupVariableError::VarError(e)) => {
+        Err(SetupVariableError::Missing(e)) => {
             // They haven't given us an environment variable we need
-            panic!("Error reading {e}")
+            panic!("Error | Missing env var: {e}")
+        }
+        Err(SetupVariableError::Malformed(e)) => {
+            panic!("Error | Bad UTF-8 : {e}")
         }
     };
     trace!("environment variables parsed: {env_vars:?}");
@@ -142,7 +145,7 @@ fn main() {
     rt_handle.block_on(async {
         // await runs the async function and stops this thread until it's finished
         // map_err takes our error output and changes it to whatever we want
-        let _ = setup_db(&env_vars.surreal).await.map_err(|_| ());
+        let _ = setup_db(&env_vars.surreal).await.map_err(|_| (error!("The Database has failed to connect PROBABLY PANIC?!")));
         thread_dispatcher(&env_vars.kafka, pool).await;
     });
 

@@ -1,5 +1,7 @@
-/target
+llm_dispatcher/target
 /__pycache__
+/llm_dispatcher/model*
+.env
 
 
 # Added by cargo

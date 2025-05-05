@@ -171,7 +171,7 @@ impl Worker {
         let filenames = vec![repo.get("model.safetensors").unwrap()];
         let tokenizer = tokenizers::tokenizer::Tokenizer::from_file(tokenizer_filename).unwrap();
         let config_file = repo.get("config.json").unwrap();
-        let device = candle_examples::device(true).unwrap();
+        let device = candle_examples::device(false).unwrap();
         let dtype = if device.is_cuda() {
             DType::BF16
         } else {

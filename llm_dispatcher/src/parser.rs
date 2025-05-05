@@ -8,7 +8,7 @@ use winnow::Result as WinnowResult;
 use winnow::ascii::digit1;
 use winnow::combinator::{alt, opt, separated, separated_pair};
 use winnow::prelude::*;
-use winnow::token::{literal, take_until, take_while};
+use winnow::token::{take_until, take_while};
 
 // logging
 use log::{info, trace};
@@ -50,7 +50,8 @@ pub fn parse_kafka_message(input: &mut &str) -> WinnowResult<ParsedKafkaMessage>
 
 #[derive(Debug)]
 pub enum SetupVariableError {
-    VarError(VarError),
+    Missing(String),
+    Malformed(String),
     ParseError(String),
     AskedHelp, // the user asked for help, we shoud now gracefully exit
 }
@@ -125,7 +126,10 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
         return Err(SetupVariableError::AskedHelp);
     }
     // is there a variable called LAZY_LOAD and if so is it something we can read as either true of false
-    let lazy_load_var = var("LAZY_LOAD").map_err(SVErr::VarError)?;
+    let lazy_load_var = var("LAZY_LOAD").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("LAZY_LOAD")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("LAZY_LOAD"))}
+    )?;
     let lazy_load = parse_bool(&mut &lazy_load_var[..]).map_err(|_| {
         SVErr::ParseError(
             "LAZY_LOAD couldn't be read as a bool, consider using true or false".to_string(),
@@ -142,20 +146,26 @@ pub fn read_environment_vars() -> Result<EnvVars, SVErr> {
 /// If any supplied are malformed then it will error out
 fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
     // for each environment variable we check if it exists and then if it looks valid
-    let hostname_var = var("KAFKA_HOST").map_err(SVErr::VarError)?;
+    let hostname_var = var("KAFKA_HOST").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("KAFKA_HOST")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("KAFKA_HOST"))})?;
     let hostname = parse_hostname_set(&mut &hostname_var[..]).map_err(|_| {
         SVErr::ParseError(
             "KAFKA_HOST couldn't be parsed, use either a valid ipv4 address or localhost along with valid ports, it should be a comma separated list"
                 .to_string(),
         )
     })?;
-    let topics_var = var("KAFKA_TOPICS").map_err(SVErr::VarError)?;
+    let topics_var = var("KAFKA_TOPICS").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("KAFKA_TOPICS")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("KAFKA_TOPICS"))})?;
     let topics: Box<[EnvVar]> = (parse_topics(&mut &topics_var[..]) // this is a little messy but just collects up the data we need
         .map_err(|_| SVErr::ParseError("KAFKA_TOPICS could not be parsed, must be a word (constructed out of some alphanumerics and _'s) or comma seperated list of words, make sure you don't have any trailing commas".to_string()))?)
     .iter()
     .map(|v| ((*v).to_string()).into_boxed_str())
     .collect();
-    let group_id_var = var("KAFKA_GROUP_ID").map_err(SVErr::VarError)?;
+    let group_id_var = var("KAFKA_GROUP_ID").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("KAFKA_GROUP_ID")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("KAFKA_GROUP_ID"))})?;
     let timeout_var = var("KAFKA_TIMEOUT").unwrap_or("60000".to_string()); // if we don't get timeout then set to 60000
     let timeout = test_timeout(&mut &timeout_var[..]).map_err(|_| {
         SVErr::ParseError("KAFKA_TIMEOUT could not be parsed, must be a number".to_string())
@@ -171,18 +181,36 @@ fn parse_kafka_env_vars() -> Result<KafkaVars, SVErr> {
 
 fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
     // same as above
-    let hostname_var = var("SURREAL_HOST").map_err(SVErr::VarError)?;
+    let hostname_var = var("SURREAL_HOST").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("SURREAL_HOST")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("SURREAL_HOST"))}
+    )?;
     let hostname = parse_hostname(&mut &hostname_var[..]).map_err(|_| {
         SVErr::ParseError(
             "SURREAL_HOST could not be parsed, please use a valid ipv4 address or localhost, or port, it should be a comma separated list"
                 .to_string(),
         )
     })?;
-    let namespace_var = var("SURREAL_NAMESPACE").map_err(SVErr::VarError)?;
-    let database_var = var("SURREAL_DATABASE").map_err(SVErr::VarError)?;
-    let user_var = var("SURREAL_USER").map_err(SVErr::VarError)?;
-    let pass_var = var("SURREAL_PASS").map_err(SVErr::VarError)?;
-    let table_var = var("SURREAL_TABLE").map_err(SVErr::VarError)?;
+    let namespace_var = var("SURREAL_NAMESPACE").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("SURREAL_NAMESPACE")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("SURREAL_NAMESPACE"))}
+    )?;
+    let database_var = var("SURREAL_DATABASE").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("SURREAL_DATABASE")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("SURREAL_DATABASE"))}
+    )?;
+    let user_var = var("SURREAL_USER").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("SURREAL_USER")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("SURREAL_USER"))}
+    )?;
+    let pass_var = var("SURREAL_PASS").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("SURREAL_PASS")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("SURREAL_PASS"))}
+    )?;
+    let table_var = var("SURREAL_TABLE").map_err(|e| match e {
+        VarError::NotPresent => SVErr::Missing(String::from("SURREAL_TABLE")),
+        VarError::NotUnicode(_) => SVErr::Malformed(String::from("SURREAL_TABLE"))}
+    )?;
 
     Ok(SurrealVars {
         surreal_host: hostname.into(),
@@ -271,7 +299,7 @@ fn parse_topics<'i>(input: &mut &'i str) -> Result<Vec<&'i str>, anyhow::Error> 
 
 // a word is just some number of alphanumerics with _'s allowed
 fn topic_parser<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
-    take_while(1.., ('_', '0'..='9', 'a'..='z', 'A'..='Z')).parse_next(input)
+    take_while(1.., ('_', '0'..='9', 'a'..='z', 'A'..='Z', '-')).parse_next(input)
 }
 
 // bool just checks if the first letter is t or f and returns true or false respectively

@@ -1,36 +1,22 @@
-[project]
-name = "scg-backend"
-version = "0.1.2"
-description = "The Server Backend for the SCG project"
-authors = [
-    {name = "Jemma",email = "jf1454@york.ac.uk"},
-    {name = "hermaplusplus", email = "is942@york.ac.uk"}
-]
+[tool.poetry]
+name = "scg-backend-webserver"
+version = "0.1.0"
+description = "python webserver"
+authors = ["Jemma <jf1454@york.ac.uk>",
+            "hermaplusplus <is942@york.ac.uk>"]
 readme = "README.md"
 package-mode = false
-requires-python = ">=3.10"
 
-dependencies = [
-"torch (>=2.6.0)",
-"torchvision (>=0.21.0)",
-"transformers (>=4.49.0)",
-"accelerate (>=1.4.0)",
-"pre-commit (>=4.1.0)",
-"fastapi[standard] (>=0.115.8,<0.116.0)",
-"uvicorn[standard] (>=0.34.0,<0.35.0)",
-"kafka-python (>=2.1.4,<3.0.0)",
-"surrealdb (>=1.0.3,<2.0.0)",
-"dotenv (>=0.9.9,<0.10.0)",
-]
+[tool.poetry.dependencies]
+python = "^3.12"
+pre-commit = "^4.1.0"
+fastapi = {version = "^0.115.8", extras = ["standard"]}
+uvicorn = {version = "^0.34.0", extras = ["standard"]}
+kafka-python = "^2.1.4"
+surrealdb = "^1.0.3"
+dotenv = "^0.9.9"
+
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
+requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-# [tool.poetry.dependencies]
-# torch = "^2.6.0"
-# torchvision = "^0.21.0"
-# transformers = "^4.49.0"
-# accelerate = "^1.4.0"
-# pre-commit = "^4.1.0"
-# flask = "^3.1.0"

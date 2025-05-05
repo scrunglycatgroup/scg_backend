@@ -10,8 +10,6 @@ from surrealdb import RecordID
 from dotenv import load_dotenv
 import os
 
-from llm_dispatcher import Dispatcher
-
 def help():
     print("""
     -h : brings up this menu
@@ -57,6 +55,7 @@ def start_logger(log_arg: str):
     return
 
 load_dotenv()
+background_tasks = set()
 
 if "-h" in sys.argv:
     help()
@@ -66,7 +65,13 @@ log_level = load_env("PY_LOGGER")
 start_logger(log_level.upper())
 
 kafka_topics = load_env("PY_KAFKA_TOPICS").split(",")
+kafka_topics.append("web_heartbeat")
 db_table = load_env("PY_SURREAL_TABLE")
+
+async def heartbeat():
+    while True:
+        await asyncio.sleep(10)
+        producer.send(topic="web_heartbeat",value="ping".encode("utf-8"))
 
 app = FastAPI()
 
@@ -81,7 +86,7 @@ async def startup_event():
     # Create the topics for kafka 
     kafka_host = load_env("PY_KAFKA_HOST")
     kafka_port = load_env("PY_KAFKA_PORT")
-    admin = KafkaAdminClient(bootstrap_servers=f'{kafka_host}:{kafka_port}')
+    admin = KafkaAdminClient(bootstrap_servers=f'{kafka_host}:{kafka_port}',api_version=(4,0,0))
     topics = []
     for topic in kafka_topics:
         if topic not in (admin.list_topics()): 
@@ -90,7 +95,7 @@ async def startup_event():
         admin.create_topics(topics)
 
     # create the producer we will send data with 
-    producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=1, retries=3)
+    producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=0, retries=3,api_version=(4,0,0))
     if not producer.bootstrap_connected:
         logging.error("not connected to KAFKA server")
     
@@ -104,6 +109,9 @@ async def startup_event():
     db = AsyncSurreal(f"ws://{db_host}:{db_port}")
     await db.use(db_namespace,db_db)
     await db.signin({"username":db_user,"password":db_pass})
+    task = asyncio.create_task(heartbeat())
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
     print("Application Starting")
 
 @app.on_event("shutdown")
@@ -124,11 +132,17 @@ async def basic_generate(message: GenerateBody):
     while True:
         await asyncio.sleep(check_rate)
         check = await db.select(RecordID('request',database_id))
-        if 'output' in check:
+        if check != None and 'output' in check:
             return {"message":check['output'].decode('utf-8')}
         if counter == timeout:
             return {"message":"timeout"}
         counter += 1
+
+async def heartbeat():
+    while True:
+        await asyncio.sleep(10)
+        producer.send(topic="web_heartbeat",value="ping".encode("utf-8"))
+
 
 if __name__ == "__main__":
     print("You should be running me through `fastapi dev run.py`")
