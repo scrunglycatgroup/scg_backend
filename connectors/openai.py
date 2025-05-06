@@ -36,8 +36,10 @@ class OpenAIConnector(BaseConnector):
             _strict_response_validation=connector["arguments"][0].get("_strict_response_validation", False)
         )
 
-    def completion(self, *, content:str, language:Optional[str]="", language_version:Optional[str]=""):
-        msg = f"Language: {language}\nLanguage Version: {language_version}\nCode:\n```\n{content}\n```"
+    def completion(
+            self,
+            model_request:ModelRequest,
+            **kwargs) -> ModelResponse:
         
         response = self.__client.chat.completions.create(
             model=self.__model_name,
