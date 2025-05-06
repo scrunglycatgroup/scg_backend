@@ -11,6 +11,8 @@ class ModelRequest(BaseModel):
     content: str
     language: Optional[str] = "undefined"
     language_version: Optional[str] = "undefined"
+    purpose: Optional[str] = "undefined"
+    extra_data: Optional[Dict[str, str]] = {}
     connector: Optional[Connector] = Field(default_factory=lambda: {
         "connector": "undefined",
         "model_name": "undefined",
@@ -20,6 +22,8 @@ class ModelRequest(BaseModel):
 
 class ModelResponse(BaseModel):
     content: str
+    status_code: Optional[int] = 200
+    flags: Optional[List[str]] = []
 
 if __name__ == "__main__":
     # test the ModelRequest class
