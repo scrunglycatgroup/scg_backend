@@ -24,9 +24,12 @@ connector = common.Connector(
 client = connectors.openai.OpenAIConnector(connector=connector)
 
 client.completion(
-    content="def mult(x, y):\n\treturn x * y",
-    language="Python",
-    language_version="3.13.2"
+    common.ModelRequest(
+        content="def mult(x, y):\n\treturn x * y",
+        language="Python",
+        language_version="3.13.2",
+        purpose="doc_string"
+    )
 )
 ```
 
