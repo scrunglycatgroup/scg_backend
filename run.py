@@ -1,6 +1,7 @@
 import asyncio
 from kafka import KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic
+from kafka.errors import KafkaTimeoutError
 from fastapi import FastAPI
 import logging
 import sys 
@@ -79,6 +80,9 @@ class GenerateBody(BaseModel):
     input: str
     tokens: int
 
+class HealthCheck(BaseModel):
+        status: str = "Ok"
+
 @app.on_event("startup")
 async def startup_event():
     global db
@@ -86,16 +90,18 @@ async def startup_event():
     # Create the topics for kafka 
     kafka_host = load_env("PY_KAFKA_HOST")
     kafka_port = load_env("PY_KAFKA_PORT")
-    admin = KafkaAdminClient(bootstrap_servers=f'{kafka_host}:{kafka_port}',api_version=(4,0,0))
+    admin = KafkaAdminClient(bootstrap_servers=f'{kafka_host}:{kafka_port}',api_version=(4,0))
     topics = []
     for topic in kafka_topics:
         if topic not in (admin.list_topics()): 
             topics.append(NewTopic(topic,num_partitions=1, replication_factor=1))
     if topics != []:
         admin.create_topics(topics)
+    
+    admin.close()
 
     # create the producer we will send data with 
-    producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=0, retries=3,api_version=(4,0,0))
+    producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=1, retries=3,api_version=(4,0))
     if not producer.bootstrap_connected:
         logging.error("not connected to KAFKA server")
     
@@ -109,15 +115,15 @@ async def startup_event():
     db = AsyncSurreal(f"ws://{db_host}:{db_port}")
     await db.use(db_namespace,db_db)
     await db.signin({"username":db_user,"password":db_pass})
-    task = asyncio.create_task(heartbeat())
-    background_tasks.add(task)
-    task.add_done_callback(background_tasks.discard)
-    print("Application Starting")
+    # task = asyncio.create_task(heartbeat())
+    # background_tasks.add(task)
+    # task.add_done_callback(background_tasks.discard)
+    logging.debug("Application Starting")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await db.close()
-    print("DB connection closed")
+    logging.debug("DB connection closed")
 
 @app.post("/generate")
 async def basic_generate(message: GenerateBody):
@@ -125,6 +131,7 @@ async def basic_generate(message: GenerateBody):
     database_id = request['id'].id
     kafka_message = (database_id + " " + message.input).encode("utf-8")
     producer.send(topic=kafka_topics[0],value=kafka_message)
+    producer.flush()
     # now we loop over waiting a little bit and checking if 'output' is ever written to, look into subscribe_live
     check_rate = 4
     timeout = 120 / check_rate
@@ -138,10 +145,9 @@ async def basic_generate(message: GenerateBody):
             return {"message":"timeout"}
         counter += 1
 
-async def heartbeat():
-    while True:
-        await asyncio.sleep(10)
-        producer.send(topic="web_heartbeat",value="ping".encode("utf-8"))
+@app.get("/health")
+async def healthcheck():
+    return HealthCheck(status="Ok")
 
 
 if __name__ == "__main__":
