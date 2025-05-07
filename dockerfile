@@ -12,8 +12,9 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 COPY ./pyproject.toml ./poetry.lock ./
-COPY ./run.py ./run.py 
 
 RUN poetry install --no-root && rm -rf $POETRY_CACHE_DIR
+
+COPY ./run.py ./run.py 
 
 CMD ["poetry", "run", "fastapi", "run", "run.py"]

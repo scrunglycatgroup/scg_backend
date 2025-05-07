@@ -5,7 +5,6 @@ WORKDIR /rust-llm-dispatcher
 
 COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
-COPY ./models--Qwen--Qwen2-1.5B ./
 
 RUN cargo build --release
 RUN rm src/*.rs
@@ -18,7 +17,8 @@ RUN cargo build --release
 FROM rust:1.86
 
 COPY --from=build /rust-llm-dispatcher/target/release/rust-llm-dispatcher . 
-COPY --from=build /rust_llm_dispatcher/models--Qwen--Qwen2-1.5B /root/.cache
+
+COPY  ./models--Qwen--Qwen2-1.5B /root/.cache/models--Qwen--Qwen2-1.5B
 
 EXPOSE 8000
 
