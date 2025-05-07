@@ -3,10 +3,11 @@ use rdkafka::Message;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
+use rdkafka::util::get_rdkafka_version;
 
 /// surreal imports
 use surrealdb::Surreal;
-use surrealdb::engine::remote::ws::{Client, Wss};
+use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use tokio::runtime::Runtime;
 
@@ -21,6 +22,8 @@ mod parser;
 
 use llm_pool::LLMPool;
 use parser::{KafkaVars, SetupVariableError, SurrealVars, read_environment_vars};
+
+use std::thread;
 
 // This is an application wide (global) lock on the database
 static DB: LazyLock<Surreal<Client>> = LazyLock::new(Surreal::init);
@@ -42,6 +45,10 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
     let context = KafkaClientContext;
 
     info!("Connecting to kafka");
+
+    let (version_n, version_s) = get_rdkafka_version();
+    info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
+
     let consumer: StreamConsumer<KafkaClientContext> =
         ClientConfig::new() // here we connect to the kafka stream with all the variables we need to
             .set("group.id", vars.kafka_group_id.to_string())
@@ -49,12 +56,14 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", vars.kafka_timeout.to_string())
             .set("enable.auto.commit", "true")
+            .set("security.protocol","plaintext")
+            .set("broker.version.fallback","4.0.0")
             .create_with_context(context)
             .expect("consumer creation failed");
 
     // connect to all the topics and listen to all of them
     let topics: Vec<&str> = vars.kafka_topics.iter().map(AsRef::as_ref).collect();
-    info!("Subscribing to kafka topics");
+    info!("Subscribing to kafka topics: {:?}",topics);
     consumer
         .subscribe(&topics)
         .expect("Could not subscribe to topics");
@@ -90,8 +99,9 @@ pub async fn thread_dispatcher(vars: &KafkaVars, pool: LLMPool) {
 async fn setup_db(env_vars: &SurrealVars) -> surrealdb::Result<()> {
     // Ws is a websocket connection (allows for better callback and is recomended mode)
     trace!("starting connection to database");
-    DB.connect::<Wss>(format!("{}", env_vars.surreal_host))
+    DB.connect::<Ws>(format!("{}/rpc", env_vars.surreal_host))
         .await?;
+    trace!("Signing in");
     DB.signin(Root {
         username: &format!("{}", env_vars.surreal_user),
         password: &format!("{}", env_vars.surreal_pass),
@@ -107,6 +117,7 @@ async fn setup_db(env_vars: &SurrealVars) -> surrealdb::Result<()> {
 
 fn main() {
     env_logger::init();
+    thread::sleep(std::time::Duration::from_secs(10));
     // Entry point to the application
     info!("LLM dispatcher booting");
     let env_vars = match read_environment_vars() {

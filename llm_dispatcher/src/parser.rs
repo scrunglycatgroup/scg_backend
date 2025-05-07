@@ -5,10 +5,11 @@ use std::env::{self, var};
 use dotenv::dotenv;
 
 use winnow::Result as WinnowResult;
-use winnow::ascii::digit1;
+use winnow::ascii::{alpha1, digit1};
 use winnow::combinator::{alt, opt, separated, separated_pair};
 use winnow::prelude::*;
 use winnow::token::{take_until, take_while};
+use winnow::stream::AsChar;
 
 // logging
 use log::{info, trace};
@@ -185,7 +186,7 @@ fn parse_surreal_env_vars() -> Result<SurrealVars, SVErr> {
         VarError::NotPresent => SVErr::Missing(String::from("SURREAL_HOST")),
         VarError::NotUnicode(_) => SVErr::Malformed(String::from("SURREAL_HOST"))}
     )?;
-    let hostname = parse_hostname(&mut &hostname_var[..]).map_err(|_| {
+    let hostname = parse_hostname_and_port(&mut &hostname_var[..]).map_err(|_| {
         SVErr::ParseError(
             "SURREAL_HOST could not be parsed, please use a valid ipv4 address or localhost, or port, it should be a comma separated list"
                 .to_string(),
@@ -236,7 +237,11 @@ fn parse_hostname_and_port<'i>(input: &mut &'i str) -> WinnowResult<&'i str> {
 }
 
 fn parse_hostname<'i>(hostname: &mut &'i str) -> WinnowResult<&'i str> {
-    Parser::take(alt((parse_ip, "localhost"))).parse_next(hostname)
+    Parser::take(alt((parse_ip, parse_dns_hostname))).parse_next(hostname)
+}
+
+fn parse_dns_hostname<'i>(hostname: &mut &'i str) -> WinnowResult<&'i str> {
+    Parser::take(take_while(1.., (AsChar::is_alpha,'_'))).parse_next(hostname)
 }
 
 // check if ipv4 is valid
@@ -359,6 +364,10 @@ mod test {
         let local_parsed = parse_hostname_and_port(&mut local);
         assert!(local_parsed.is_ok());
         assert_eq!(local_parsed.unwrap(), "localhost:8080");
+        let mut local = "surrealdb:8080";
+        let local_parsed = parse_hostname_and_port(&mut local);
+        assert!(local_parsed.is_ok());
+        assert_eq!(local_parsed.unwrap(), "surrealdb:8080");
         let mut simple_ip = "192.168.0.4:3030";
         let simple_ip_parsed = parse_hostname_and_port(&mut simple_ip);
         assert!(simple_ip_parsed.is_ok());
