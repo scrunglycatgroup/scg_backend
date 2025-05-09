@@ -348,6 +348,7 @@ mod test {
         let input = format!("{input_db_id} {input_code}");
         let parsed: Result<ParsedKafkaMessage, String> = input.parse();
         assert!(parsed.is_ok_and(|x| x.database_id == "w6xb3izpgvz4n0gow6q7"));
+        assert!(parsed.is_ok_and(|x| x.message == input_code));
     }
 
     #[test]

@@ -37,7 +37,7 @@ def load_env(env_var:str) -> str:
     return var
 
 def start_logger(log_arg: str):
-
+    global logging
     match log_arg:
         case "DEBUG":
             log_level = logging.DEBUG
@@ -52,7 +52,7 @@ def start_logger(log_arg: str):
         case _:
             raise RuntimeError(f"Log level '{log_arg}' is not recognised")
 
-    logging.basicConfig(stream=sys.stderr, level=log_level)
+    logging.basicConfig(stream=sys.stdout, level=log_level)
     return
 
 load_dotenv()
@@ -71,8 +71,10 @@ db_table = load_env("PY_SURREAL_TABLE")
 
 async def heartbeat():
     while True:
-        await asyncio.sleep(10)
-        producer.send(topic="web_heartbeat",value="ping".encode("utf-8"))
+        ### Currently a crude fix for message timeouts
+        await asyncio.sleep(60)
+        producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=1, retries=3,api_version=(4,0))
+        producer.close()
 
 app = FastAPI()
 
@@ -88,6 +90,8 @@ async def startup_event():
     global db
     global producer
     # Create the topics for kafka 
+    global kafka_host
+    global kafka_port
     kafka_host = load_env("PY_KAFKA_HOST")
     kafka_port = load_env("PY_KAFKA_PORT")
     admin = KafkaAdminClient(bootstrap_servers=f'{kafka_host}:{kafka_port}',api_version=(4,0))
@@ -115,10 +119,12 @@ async def startup_event():
     db = AsyncSurreal(f"ws://{db_host}:{db_port}")
     await db.use(db_namespace,db_db)
     await db.signin({"username":db_user,"password":db_pass})
-    # task = asyncio.create_task(heartbeat())
-    # background_tasks.add(task)
-    # task.add_done_callback(background_tasks.discard)
+    task = asyncio.create_task(heartbeat())
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+
     logging.debug("Application Starting")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -127,21 +133,27 @@ async def shutdown_event():
 
 @app.post("/generate")
 async def basic_generate(message: GenerateBody):
-    request = await db.create(db_table, {"input": message.input.encode("utf-8")})
+    logging.debug("Got generate request")
+    request = await db.create(db_table, {"input": message.input})
     database_id = request['id'].id
     kafka_message = (database_id + " " + message.input).encode("utf-8")
     producer.send(topic=kafka_topics[0],value=kafka_message)
-    producer.flush()
+    logging.debug("Sent kafka message")
     # now we loop over waiting a little bit and checking if 'output' is ever written to, look into subscribe_live
     check_rate = 4
-    timeout = 120 / check_rate
+    timeout = 500 / check_rate
     counter = 0
+    logging.debug("Starting polling loop")
     while True:
         await asyncio.sleep(check_rate)
-        check = await db.select(RecordID('request',database_id))
+        logging.debug("Poll")
+        check = await db.select(RecordID(db_table,database_id))
+        logging.debug(f"Poll response: {check}")
         if check != None and 'output' in check:
-            return {"message":check['output'].decode('utf-8')}
+            logging.debug("Returning positive!")
+            return {"message":check['output']}
         if counter == timeout:
+            logging.debug("Timeout!")
             return {"message":"timeout"}
         counter += 1
 

@@ -18,7 +18,8 @@ FROM rust:1.86
 
 COPY --from=build /rust-llm-dispatcher/target/release/rust-llm-dispatcher . 
 
-COPY  ./models--Qwen--Qwen2-1.5B /root/.cache/models--Qwen--Qwen2-1.5B
+# This line is for model caching but I'm having issues with it at the moment
+# COPY  ./huggingface /root/.cache/huggingface
 
 EXPOSE 8000
 

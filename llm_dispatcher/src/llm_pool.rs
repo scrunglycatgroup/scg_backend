@@ -8,10 +8,12 @@
 use anyhow::{Error as E, Result};
 
 use candle_core::{DType, Device, Tensor};
-use candle_examples::token_output_stream::TokenOutputStream;
+use tokenizers::Tokenizer;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
+use candle_transformers::models::phi::{Config as PhiConfig, Model as Phi};
+use candle_examples::token_output_stream::TokenOutputStream;
+use candle_transformers::models::mixformer::{Config, MixFormerSequentialForCausalLM as MixFormer};
 use hf_hub::api::sync::Api;
 use hf_hub::{Repo, RepoType};
 
@@ -158,32 +160,36 @@ impl Worker {
     }
 
     // This is **A LOT** of boilerplate, basically just starts a new llm and loads everything we need to
-    fn spool_llm() -> Result<LLM, ()> {
+    fn spool_llm() -> Result<LLM> {
+        trace!("Start llm spool seq");
+
         let start = std::time::Instant::now();
-        let api = Api::new().map_err(|_| ())?;
-        let model_id = "Qwen/Qwen2-1.5B"; // paramiterize this please
+        let api = Api::new()?;
+        let model_id = "microsoft/phi-1_5"; // paramiterize this please
         let repo = api.repo(Repo::with_revision(
             model_id.to_string(),
             RepoType::Model,
-            "main".to_string(),
+            "refs/pr/73".to_string(),
         ));
-        let tokenizer_filename = repo.get("tokenizer.json").unwrap();
-        let filenames = vec![repo.get("model.safetensors").unwrap()];
-        let tokenizer = tokenizers::tokenizer::Tokenizer::from_file(tokenizer_filename).unwrap();
-        let config_file = repo.get("config.json").unwrap();
-        let device = candle_examples::device(false).unwrap();
+        let tokenizer_filename =  repo.get("tokenizer.json")?;
+        let filenames = vec![repo.get("model.safetensors")?];
+        trace!("Load filenames");
+        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+        let config: Config = Config::v1_5();
+        trace!("Loaded config file");
+        let device = candle_examples::device(true)?;
         let dtype = if device.is_cuda() {
             DType::BF16
         } else {
             DType::F32
         };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device) };
-        let model = {
-            let config: ConfigBase =
-                serde_json::from_slice(&std::fs::read(config_file).map_err(|_| ())?)
-                    .map_err(|_| ())?;
-            ModelBase::new(&config, vb.map_err(|_| ())?).map_err(|_| ())?
-        };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let model= { let config_filename = repo.get("config.json")?;
+                let config = std::fs::read_to_string(config_filename)?;
+                let config: PhiConfig = serde_json::from_str(&config)?;
+                let phi = Phi::new(&config, vb)?;
+                phi };
+
         info!("loaded the model in {:?}", start.elapsed());
 
         Ok(LLM::new(
@@ -194,7 +200,8 @@ impl Worker {
             None,
             1.1,     // how much we penalise for it repeating itself
             64,      // how many tokens we care about for the repeating
-            &device, // info on what we are running it on
+            false,
+            &device,
         ))
     }
 
@@ -235,12 +242,10 @@ impl Worker {
                 // the message we got is all good!
                 //  turn the raw String into the database_id and the input to the transformer
                 let contents = parser::parse_kafka_message(&mut &s[..]).unwrap();
-                trace!("Split kafka message into database id and request");
-                let output = if let Ok(s) = llm.run(&contents.message, 500) {
-                    s
-                } else {
-                    error!("Something went wrong generating an output (check llm.run())");
-                    "Error Generating output".to_string()
+                trace!("Split kafka message into database id and request {:?}",contents);
+                let output = match  llm.run(&contents.message, 500) {
+                    Ok(s) => s,
+                    Err(e) => {error!("Error check llm.run() : {:?}",e); "Error Generating output".to_string()}
                 };
                 // now we create a little async function where we write to the
                 // database and wait until that's finished before finishing up
@@ -252,6 +257,7 @@ impl Worker {
                         .await
                         .unwrap();
                 });
+                trace!("Written output returning to readystate");
                 Ok(llm)
             }
             Err(_) => {
@@ -266,34 +272,36 @@ impl Worker {
 // candle handles most of this
 #[allow(clippy::upper_case_acronyms)]
 pub struct LLM {
-    model: ModelBase,
+    model: Phi,
     device: Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
+    verbose: bool,
 }
 
 impl LLM {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        model: ModelBase,
-        tokenizer: tokenizers::Tokenizer,
+        model: Phi,
+        tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
+        verbose: bool,
         device: &Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
-        let token: tokenizers::tokenizer::Tokenizer = tokenizer;
         Self {
             model,
-            tokenizer: TokenOutputStream::new(token),
+            tokenizer: TokenOutputStream::new(tokenizer),
             logits_processor,
             repeat_penalty,
             repeat_last_n,
+            verbose,
             device: device.clone(),
         }
     }
@@ -302,29 +310,44 @@ impl LLM {
     // until we see some eos_token and then send whatever is generated
     #[allow(clippy::cast_precision_loss)]
     pub fn run(&mut self, prompt: &str, sample_len: usize) -> Result<String, anyhow::Error> {
-        let mut out: String = String::new();
+        trace!("Starting generation");
         self.tokenizer.clear();
-        let mut tokens = self
-            .tokenizer
-            .tokenizer()
-            .encode(prompt, true)
-            .map_err(E::msg)?
-            .get_ids()
-            .to_vec();
+        self.model.clear_kv_cache();
+        trace!("cleared tokenizer");
+        let tokens = self.tokenizer.tokenizer().encode(prompt, true).map_err(E::msg)?;
+        trace!("tokens encoded: {:?}",tokens);
+        if tokens.is_empty() {
+            panic!("Please include prompt")
+        }
+        if self.verbose {
+            for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
+                let token = token.replace('▁', " ").replace("<0x0A>", "\n");
+                println!("{id:7} -> '{token}'");
+            }
+        }
+        trace!("tokenized input");
+        let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
-        let Some(eos_token) = self.tokenizer.get_token("<|endoftext|>") else {
-            anyhow::bail!("cannot find the <|endoftext|> token")
+        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
+            Some(token) => token,
+            None => anyhow::bail!("cannot find the endoftext token"),
         };
+        trace!("Generated eos_token");
         let start_gen = std::time::Instant::now();
+        let mut result = vec![];
+        let mut pos = 0;
+        trace!("Starting generation loop");
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
-            let start_pos = tokens.len().saturating_sub(context_size);
-            let ctxt = &tokens[start_pos..];
+            let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+            trace!("Context gen complete: {:?}",ctxt);
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
-            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-            let logits = if (self.repeat_penalty - 1.).abs() < 0.01 {
-                // error margin for dealing with f32s
+            trace!("{:?}",input);
+            trace!("{:?}",input.shape().dims());
+            let logits = self.model.forward(&input)?;
+            trace!("Model forward complete");
+            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = if self.repeat_penalty == 1. {
                 logits
             } else {
                 let start_at = tokens.len().saturating_sub(self.repeat_last_n);
@@ -334,25 +357,30 @@ impl LLM {
                     &tokens[start_at..],
                 )?
             };
+            trace!("logits gen and repeat pen addeds");
             let next_token = self.logits_processor.sample(&logits)?;
+            trace!("next token generated {:?}",next_token);
             tokens.push(next_token);
             generated_tokens += 1;
             if next_token == eos_token {
+                trace!("eos token found. exiting");
+                 if let Some(t) = self.tokenizer.decode_rest()? {
+                    trace!("{t}");
+                }
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
-                out.push_str(&t);
+                trace!("Token generated {:?}",&t);
+                result.push(t);
+                
             }
         }
         let dt = start_gen.elapsed();
-        if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
-            out.push_str(&rest);
-        }
         info!(
             "{generated_tokens} tokens generated ({:.2} tokens/s)",
             generated_tokens as f64 / dt.as_secs_f64(),
         );
 
-        Ok(out)
+        Ok(result.join(""))
     }
 }

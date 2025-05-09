@@ -1,6 +1,6 @@
 llm_dispatcher/target
 /__pycache__
-/llm_dispatcher/model*
+/llm_dispatcher/huggingface
 .env
 
 
