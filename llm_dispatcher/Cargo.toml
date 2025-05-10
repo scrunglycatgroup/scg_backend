@@ -1,0 +1,36 @@
+[package]
+name = "rust-llm-dispatcher"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = {version ="1.40", features = ["full"]}
+anyhow = "1.0.95"
+candle-core = "0.9.1"
+candle-examples = "0.9.1"
+candle-nn = "0.9.1"
+candle-transformers = "0.9.1"
+hf-hub = {version = "0.4.1", features = ["tokio"]}
+tokenizers = "0.21.1"  # This is downgraded to match another version of tokenizers used by candle_examples
+serde_json = "1.0.140"
+serde = {version="1.0.219", features=["derive"]}
+surrealdb = {version="2.3.0", features=["rustls"]}
+rdkafka = {version="0.37.0"}
+winnow = "0.7.6"
+dotenv = "0.15.0"
+log = "0.4.27"
+env_logger = "0.11.8"
+
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3
+panic = 'abort'
+
+[package.metadata.cross.target.x86_64-pc-windows-gnu]
+pre-build = [
+  "sudo mkdir -p /etc/apt/keyrings",
+  "wget -qO - https://packages.confluent.io/deb/7.9/archive.key | gpg \\ --dearmor | sudo tee /etc/apt/keyrings/confluent.gpg > /dev/null",
+  "apt install librdkafka-dev",
+]

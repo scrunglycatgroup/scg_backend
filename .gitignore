@@ -1,2 +1,11 @@
-/target
+llm_dispatcher/target
 /__pycache__
+/llm_dispatcher/huggingface
+.env
+
+
+# Added by cargo
+#
+# already existing elements were commented out
+
+#/target

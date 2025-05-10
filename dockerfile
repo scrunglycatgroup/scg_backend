@@ -1,22 +1,20 @@
-# syntax=docker/dockerfile:1
-FROM rust:1.85 AS build  # change from rust build source 
+FROM python:3.13.3-slim-bookworm
 
-WORKDIR /usr/src/scg_backend
-COPY . . 
+WORKDIR /code
 
-# Build release
-RUN cargo install --path .
+RUN pip install poetry
 
+EXPOSE 8000
 
-## Create the runner build 
-FROM docker.io/debian:bookworm-slim
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
 
-RUN apt-get update && apt-get install libssl-dev -y
+COPY ./pyproject.toml ./poetry.lock ./
 
-COPY --from=build /usr/local/cargo/bin/scg_backend /usr/local/bin/scg_backend
+RUN poetry install --no-root && rm -rf $POETRY_CACHE_DIR
 
-ENV ROCKET_ADDRESS=0.0.0.0
-ENV ROCKET_PORT=8080
+COPY ./run.py ./run.py 
 
-#RUN
-CMD ["scg_backend"]
+CMD ["poetry", "run", "fastapi", "run", "run.py"]

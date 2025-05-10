@@ -1,12 +1,43 @@
+import asyncio
+from kafka import KafkaProducer
+from kafka.admin import KafkaAdminClient, NewTopic
+from kafka.errors import KafkaTimeoutError
 from fastapi import FastAPI
 import logging
 import sys 
 from pydantic import BaseModel
+from surrealdb import AsyncSurreal
+from surrealdb import RecordID
+from dotenv import load_dotenv
+import os
 
-from llm_dispatcher import Dispatcher
+def help():
+    print("""
+    -h : brings up this menu
+
+    We read these environment variables either from the environment or a file `.env`
+    PY_LOGGER : string for the log level (Debug, info, warning, error, critical)
+    PY_KAFKA_HOST: str ip or localhost address of kafka server
+    PY_KAFKA_PORT: str port of the kafka server
+    PY_KAFKA_TOPICS: str comma separated list of kafka topics to write to 
+
+    PY_SURREAL_HOST: str ip or localhost address of the db
+    PY_SURREAL_PORT: str port of the db
+    PY_SURREAL_USER: str Username for the db
+    PY_SURREAL_PASS: str password for the db
+    PY_SURREAL_NAMESPACE: str namespace
+    PY_SURREAL_DB: str db name
+    PY_SURREAL_TABLE: str table writing to
+    """)
+
+def load_env(env_var:str) -> str:
+    var = os.getenv(env_var)
+    if var is None:
+        raise RuntimeError(f"Missing environment variable {env_var}")
+    return var
 
 def start_logger(log_arg: str):
-
+    global logging
     match log_arg:
         case "DEBUG":
             log_level = logging.DEBUG
@@ -21,11 +52,29 @@ def start_logger(log_arg: str):
         case _:
             raise RuntimeError(f"Log level '{log_arg}' is not recognised")
 
-    logging.basicConfig(stream=sys.stderr, level=log_level)
+    logging.basicConfig(stream=sys.stdout, level=log_level)
     return
 
-start_logger("DEBUG".upper())
-dispatcher = Dispatcher()
+load_dotenv()
+background_tasks = set()
+
+if "-h" in sys.argv:
+    help()
+    sys.exit(0)
+
+log_level = load_env("PY_LOGGER")
+start_logger(log_level.upper())
+
+kafka_topics = load_env("PY_KAFKA_TOPICS").split(",")
+kafka_topics.append("web_heartbeat")
+db_table = load_env("PY_SURREAL_TABLE")
+
+async def heartbeat():
+    while True:
+        ### Currently a crude fix for message timeouts
+        await asyncio.sleep(60)
+        producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=1, retries=3,api_version=(4,0))
+        producer.close()
 
 app = FastAPI()
 
@@ -33,10 +82,85 @@ class GenerateBody(BaseModel):
     input: str
     tokens: int
 
+class HealthCheck(BaseModel):
+        status: str = "Ok"
+
+@app.on_event("startup")
+async def startup_event():
+    global db
+    global producer
+    # Create the topics for kafka 
+    global kafka_host
+    global kafka_port
+    kafka_host = load_env("PY_KAFKA_HOST")
+    kafka_port = load_env("PY_KAFKA_PORT")
+    admin = KafkaAdminClient(bootstrap_servers=f'{kafka_host}:{kafka_port}',api_version=(4,0))
+    topics = []
+    for topic in kafka_topics:
+        if topic not in (admin.list_topics()): 
+            topics.append(NewTopic(topic,num_partitions=1, replication_factor=1))
+    if topics != []:
+        admin.create_topics(topics)
+    
+    admin.close()
+
+    # create the producer we will send data with 
+    producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=1, retries=3,api_version=(4,0))
+    if not producer.bootstrap_connected:
+        logging.error("not connected to KAFKA server")
+    
+    # connect to the database
+    db_host = load_env("PY_SURREAL_HOST")
+    db_port = load_env("PY_SURREAL_PORT")
+    db_namespace = load_env("PY_SURREAL_NAMESPACE")
+    db_db = load_env("PY_SURREAL_DB")
+    db_user = load_env("PY_SURREAL_USER")
+    db_pass = load_env("PY_SURREAL_PASS")
+    db = AsyncSurreal(f"ws://{db_host}:{db_port}")
+    await db.use(db_namespace,db_db)
+    await db.signin({"username":db_user,"password":db_pass})
+    task = asyncio.create_task(heartbeat())
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+
+    logging.debug("Application Starting")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await db.close()
+    logging.debug("DB connection closed")
+
 @app.post("/generate")
 async def basic_generate(message: GenerateBody):
-    out = await dispatcher.run_model(message.input)
-    return {"message": out}
+    logging.debug("Got generate request")
+    request = await db.create(db_table, {"input": message.input})
+    database_id = request['id'].id
+    kafka_message = (database_id + " " + message.input).encode("utf-8")
+    producer.send(topic=kafka_topics[0],value=kafka_message)
+    logging.debug("Sent kafka message")
+    # now we loop over waiting a little bit and checking if 'output' is ever written to, look into subscribe_live
+    check_rate = 4
+    timeout = 500 / check_rate
+    counter = 0
+    logging.debug("Starting polling loop")
+    while True:
+        await asyncio.sleep(check_rate)
+        logging.debug("Poll")
+        check = await db.select(RecordID(db_table,database_id))
+        logging.debug(f"Poll response: {check}")
+        if check != None and 'output' in check:
+            logging.debug("Returning positive!")
+            return {"message":check['output']}
+        if counter == timeout:
+            logging.debug("Timeout!")
+            return {"message":"timeout"}
+        counter += 1
+
+@app.get("/health")
+async def healthcheck():
+    return HealthCheck(status="Ok")
+
 
 if __name__ == "__main__":
     print("You should be running me through `fastapi dev run.py`")

@@ -1,0 +1,26 @@
+FROM rust:1.86 AS build
+
+RUN USER=root cargo new --bin rust-llm-dispatcher
+WORKDIR /rust-llm-dispatcher
+
+COPY ./Cargo.lock ./Cargo.lock
+COPY ./Cargo.toml ./Cargo.toml
+
+RUN cargo build --release
+RUN rm src/*.rs
+
+COPY ./src ./src
+
+RUN rm ./target/release/deps/rust_llm_dispatcher*
+RUN cargo build --release
+
+FROM rust:1.86
+
+COPY --from=build /rust-llm-dispatcher/target/release/rust-llm-dispatcher . 
+
+# This line is for model caching but I'm having issues with it at the moment
+# COPY  ./huggingface /root/.cache/huggingface
+
+EXPOSE 8000
+
+CMD ["./rust-llm-dispatcher"]
