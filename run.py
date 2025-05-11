@@ -1,21 +1,29 @@
 import asyncio
+from fastapi import FastAPI
+
 from kafka import KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import KafkaTimeoutError
-from fastapi import FastAPI
-import logging
-import sys 
-from pydantic import BaseModel
+
 from surrealdb import AsyncSurreal
 from surrealdb import RecordID
-from dotenv import load_dotenv
+
+from common import ModelRequest, ModelResponse, Connector
+from connectors.openai import OpenAIConnector
+
 import os
+from dotenv import load_dotenv
+import logging
+import sys 
+from typing import Optional
+from pydantic import BaseModel
 
 def help():
     print("""
     -h : brings up this menu
 
     We read these environment variables either from the environment or a file `.env`
+
     PY_LOGGER : string for the log level (Debug, info, warning, error, critical)
     PY_KAFKA_HOST: str ip or localhost address of kafka server
     PY_KAFKA_PORT: str port of the kafka server
@@ -28,6 +36,9 @@ def help():
     PY_SURREAL_NAMESPACE: str namespace
     PY_SURREAL_DB: str db name
     PY_SURREAL_TABLE: str table writing to
+
+    CONNECTOR_API_KEY: str api key for whatever connector you are using, CHECK DOCS
+    CONNECTOR_MODEL_NAME: str name of the model we are using in the connector, CHECK DOCS
     """)
 
 def load_env(env_var:str) -> str:
@@ -56,7 +67,6 @@ def start_logger(log_arg: str):
     return
 
 load_dotenv()
-background_tasks = set()
 
 if "-h" in sys.argv:
     help()
@@ -69,18 +79,8 @@ kafka_topics = load_env("PY_KAFKA_TOPICS").split(",")
 kafka_topics.append("web_heartbeat")
 db_table = load_env("PY_SURREAL_TABLE")
 
-async def heartbeat():
-    while True:
-        ### Currently a crude fix for message timeouts
-        await asyncio.sleep(60)
-        producer = KafkaProducer(bootstrap_servers=f'{kafka_host}:{kafka_port}', acks=1, retries=3,api_version=(4,0))
-        producer.close()
 
 app = FastAPI()
-
-class GenerateBody(BaseModel):
-    input: str
-    tokens: int
 
 class HealthCheck(BaseModel):
         status: str = "Ok"
@@ -92,6 +92,11 @@ async def startup_event():
     # Create the topics for kafka 
     global kafka_host
     global kafka_port
+    # Open ai connector
+    global openAiConnector 
+
+    connector = Connector(connector="openai", model_name=load_env("CONNECTOR_MODEL_NAME"), model_tag="undefined",arguments=[{"api_key":load_env("CONNECTOR_API_KEY")}])
+    openAiConnector = OpenAIConnector(connector)
     kafka_host = load_env("PY_KAFKA_HOST")
     kafka_port = load_env("PY_KAFKA_PORT")
     admin = KafkaAdminClient(bootstrap_servers=f'{kafka_host}:{kafka_port}',api_version=(4,0))
@@ -119,10 +124,6 @@ async def startup_event():
     db = AsyncSurreal(f"ws://{db_host}:{db_port}")
     await db.use(db_namespace,db_db)
     await db.signin({"username":db_user,"password":db_pass})
-    task = asyncio.create_task(heartbeat())
-    background_tasks.add(task)
-    task.add_done_callback(background_tasks.discard)
-
     logging.debug("Application Starting")
 
 
@@ -132,30 +133,35 @@ async def shutdown_event():
     logging.debug("DB connection closed")
 
 @app.post("/generate")
-async def basic_generate(message: GenerateBody):
-    logging.debug("Got generate request")
-    request = await db.create(db_table, {"input": message.input})
-    database_id = request['id'].id
-    kafka_message = (database_id + " " + message.input).encode("utf-8")
-    producer.send(topic=kafka_topics[0],value=kafka_message)
-    logging.debug("Sent kafka message")
-    # now we loop over waiting a little bit and checking if 'output' is ever written to, look into subscribe_live
-    check_rate = 4
-    timeout = 500 / check_rate
-    counter = 0
-    logging.debug("Starting polling loop")
-    while True:
-        await asyncio.sleep(check_rate)
-        logging.debug("Poll")
-        check = await db.select(RecordID(db_table,database_id))
-        logging.debug(f"Poll response: {check}")
-        if check != None and 'output' in check:
-            logging.debug("Returning positive!")
-            return {"message":check['output']}
-        if counter == timeout:
-            logging.debug("Timeout!")
-            return {"message":"timeout"}
-        counter += 1
+async def basic_generate(message: ModelRequest):
+    if message.connector == None:
+        logging.info("Got generate request")
+        request = await db.create(db_table, {"input": message.content})
+        database_id = request['id'].id
+        # TODO: use more of the request details ESPECIALLY the purpose
+        logging.info("Generate request to be sent to local llm")
+        kafka_message = (database_id + " " + message.content).encode("utf-8")
+        producer.send(topic=kafka_topics[0],value=kafka_message)
+        logging.debug("Sent kafka message")
+        # now we loop over waiting a little bit and checking if 'output' is ever written to, look into subscribe_live
+        check_rate = 4
+        timeout = 500 / check_rate
+        counter = 0
+        logging.debug("Starting polling loop")
+        while True:
+            await asyncio.sleep(check_rate)
+            logging.debug("Poll")
+            check = await db.select(RecordID(db_table,database_id))
+            logging.debug(f"Poll response: {check}")
+            if check != None and 'output' in check:
+                logging.debug("Returning positive!")
+                return ModelResponse(content=check['output'],status_code=200,flags=[])
+            if counter >= timeout:
+                logging.debug("Timeout!")
+                return ModelResponse(content='timeout',status_code=500,flags=['timeout'])
+            counter += 1
+    else:
+        return openAiConnector.completion(model_request=message)
 
 @app.get("/health")
 async def healthcheck():
