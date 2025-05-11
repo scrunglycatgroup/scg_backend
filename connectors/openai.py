@@ -36,18 +36,55 @@ class OpenAIConnector(BaseConnector):
             _strict_response_validation=connector["arguments"][0].get("_strict_response_validation", False)
         )
 
-    def completion(self, *, content:str, language:Optional[str]="", language_version:Optional[str]=""):
-        msg = f"Language: {language}\nLanguage Version: {language_version}\nCode:\n```\n{content}\n```"
+    def completion(
+            self,
+            model_request:ModelRequest,
+            **kwargs) -> ModelResponse:
+        
+        match model_request.purpose:
+            
+            case "doc_string":
+                model = self.__model_name if self.__model_name != "auto" else "ft:gpt-4o-mini-2024-07-18:scg:docstrings:BEnEMYz9"
+                system_message = "Generate a docstring from the code block provided by the user, informed by the language and language version where appropriate. Only respond with code. Do not surround your response with triple backticks."
+                user_message = f"Language: {model_request.language}\nLanguage Version: {model_request.language_version}\nCode:\n```\n{model_request.content}\n```"
+
+            case "log_analysis":
+                model = self.__model_name if self.__model_name != "auto" else "gpt-4o-mini-2024-07-18"
+                system_message = "Explain to the user what the logs (or partial logs) provided by the user indicate, including any errors or warnings. Note whether the logs indicate the normal operation of the system, otherwise only explain the errors or warnings."
+                user_message = f"Logs:\n```\n{model_request.content}\n```"
+
+            case "compile_err":
+                model = self.__model_name if self.__model_name != "auto" else "gpt-4o-mini-2024-07-18"
+                system_message = "Explain to the user what the compilation error provided by the user means, informed by the language and language version where appropriate."
+                user_message = f"Language: {model_request.language}\nLanguage Version: {model_request.language_version}\nCompilation error:\n```\n{model_request.content}\n```"
+
+            case "unit_test":
+                model = self.__model_name if self.__model_name != "auto" else "gpt-4o-mini-2024-07-18"
+                system_message = "Generate unit tests for the code block provided by the user, informed by the language and language version where appropriate. Only respond with code. Do not surround your response with triple backticks."
+                user_message = f"Language: {model_request.language}\nLanguage Version: {model_request.language_version}\n{(f"Framework: {model_request.extra_data.get("framework", None)}") if model_request["extra_data"].get("framework", None) is not None else ""}Code:\n```\n{model_request["content"]}\n```"
+
+            case "runtime_err":
+                model = self.__model_name if self.__model_name != "auto" else "gpt-4o-mini-2024-07-18"
+                system_message = "Explain to the user what the runtime error provided by the user means, informed by the language and language version where appropriate."
+                user_message = f"Language: {model_request.language}\nLanguage Version: {model_request.language_version}\nCompilation error:\n```\n{model_request.content}\n```"
+
+            case "sql_sanit":
+                model = self.__model_name if self.__model_name != "auto" else "gpt-4o-mini-2024-07-18"
+                system_message = "Check the SQL query provided by the user for any potential SQL injection vulnerabilities. If the language in which the query si being handled is known, also give specific suggestions for mitigations."
+                user_message = f"Language: {model_request.language}\nLanguage Version: {model_request.language_version}\nCode:\n```\n{model_request.content}\n```"
+
+            case _:
+                raise ValueError(f"Purpose '{model_request.purpose}' is not recognised or not supported by the OpenAI connector.")
         
         response = self.__client.chat.completions.create(
-            model=self.__model_name,
+            model=model,
             messages=[
                 {
                     "role": "system",
                     "content": [
                         {
                             "type": "text",
-                            "text": "Generate a docstring from the code block provided by the user, informed by the language and language version where appropriate. Only respond with code. Do not surround your response with triple backticks."
+                            "text": system_message
                         }
                     ]
                 },
@@ -56,23 +93,15 @@ class OpenAIConnector(BaseConnector):
                     "content": [
                         {
                             "type": "text",
-                            "text": msg
+                            "text": user_message
                         }
                     ]
                 }
             ],
-            response_format={
-                "type": "text"
-            },
-            temperature=1,
-            max_completion_tokens=2048,
-            top_p=1,
-            frequency_penalty=0,
-            presence_penalty=0,
-            store=False
+            response_format={"type": "text"}, temperature=1, max_completion_tokens=2048, top_p=1, frequency_penalty=0, presence_penalty=0, store=False
         )
 
-        return response.choices[0].message.content
+        return ModelResponse(content=response.choices[0].message.content)
 
     def close(self):
         return

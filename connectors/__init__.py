@@ -22,7 +22,7 @@ class BaseConnector(ABC):
         pass
 
     @abstractmethod
-    def completion(self, **kwargs):
+    def completion(self, model_request:ModelRequest, **kwargs):
         """
         Generate a completion from the model.
         """
