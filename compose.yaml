@@ -8,7 +8,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: EXTERN://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,INTERN://broker:29092
-      KAFKA_ADVERTISED_LISTENERS: EXTERN://192.168.0.125:9092,CONTROLLER://localhost:9093,INTERN://broker:29092
+      KAFKA_ADVERTISED_LISTENERS: EXTERN://broker:9092,CONTROLLER://localhost:9093,INTERN://broker:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERN:PLAINTEXT,INTERN:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERN
@@ -37,7 +37,7 @@ services:
       start_period: 40s 
       start_interval: 5s
   web_server:
-    image: backend_http:latest
+    image: woonters/backend_http:latest
     ports:
       - '8001:8000'
     environment:
@@ -64,11 +64,11 @@ services:
     depends_on:
       - surrealdb
   llm_dispatcher:
-    image: llm_dispatcher:latest
+    image: woonters/llm_dispatcher:latest
     ports:
       - 8002:8000
     environment:
-      SURREAL_HOST: 192.168.0.125:8008
+      SURREAL_HOST: surrealdb:8000
       SURREAL_NAMESPACE: test
       SURREAL_DATABASE: test
       SURREAL_USER: root

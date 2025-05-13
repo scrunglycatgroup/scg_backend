@@ -134,7 +134,8 @@ async def shutdown_event():
 
 @app.post("/generate")
 async def basic_generate(message: ModelRequest):
-    if message.connector == None:
+    logging.debug(f"Message: {message}")
+    if message.connector['connector'] == 'undefined':
         logging.info("Got generate request")
         request = await db.create(db_table, {"input": message.content})
         database_id = request['id'].id
