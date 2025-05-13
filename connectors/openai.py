@@ -5,6 +5,7 @@ from openai import OpenAI, NotGiven
 from typing import Optional, Mapping, Union
 import httpx
 from httpx import Timeout
+from fastapi import HTTPException
 
 NOT_GIVEN = NotGiven()
 
@@ -20,7 +21,7 @@ class OpenAIConnector(BaseConnector):
         self.__model_name = connector.get("model_name", "undefined")
         
         if self.__model_name == "undefined":
-            raise ValueError("model_name must be defined")
+            raise HTTPException(status_code=400, detail="model_name must be defined")
 
         self.__client = OpenAI(
             api_key=connector["arguments"][0].get("api_key", None),
@@ -74,7 +75,7 @@ class OpenAIConnector(BaseConnector):
                 user_message = f"Language: {model_request.language}\nLanguage Version: {model_request.language_version}\nCode:\n```\n{model_request.content}\n```"
 
             case _:
-                raise ValueError(f"Purpose '{model_request.purpose}' is not recognised or not supported by the OpenAI connector.")
+                raise HTTPException(status_code=400, detail=f"Purpose '{model_request.purpose}' is not recognised or not supported by the OpenAI connector.")
         
         response = self.__client.chat.completions.create(
             model=model,
