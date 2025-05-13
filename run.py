@@ -15,6 +15,7 @@ import os
 from dotenv import load_dotenv
 import logging
 import sys 
+import tomllib
 from typing import Optional
 from pydantic import BaseModel
 
@@ -79,8 +80,15 @@ kafka_topics = load_env("PY_KAFKA_TOPICS").split(",")
 kafka_topics.append("web_heartbeat")
 db_table = load_env("PY_SURREAL_TABLE")
 
+with open("pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+        version = data["project"]["version"]
 
-app = FastAPI()
+app = FastAPI(
+    title="SCG Backend API",
+    description="Scrungly Cat Group Backend Application Programming Interface",
+    version=version
+)
 
 class HealthCheck(BaseModel):
         status: str = "Ok"
