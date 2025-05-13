@@ -18,7 +18,7 @@ uvicorn = {version = "^0.34.0", extras = ["standard"]}
 kafka-python = "^2.1.4"
 surrealdb = "^1.0.3"
 dotenv = "^0.9.9"
-
+openai = "^1.78.1"
 
 [build-system]
 requires = ["poetry-core"]

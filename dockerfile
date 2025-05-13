@@ -16,5 +16,7 @@ COPY ./pyproject.toml ./poetry.lock ./
 RUN poetry install --no-root && rm -rf $POETRY_CACHE_DIR
 
 COPY ./run.py ./run.py 
+COPY ./common.py ./common.py
+COPY ./connectors ./connectors
 
 CMD ["poetry", "run", "fastapi", "run", "run.py"]
