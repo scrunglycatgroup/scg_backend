@@ -11,9 +11,9 @@ class ModelRequest(BaseModel):
     content: str
     language: Optional[str] = "undefined"
     language_version: Optional[str] = "undefined"
-    purpose: Optional[str] = "undefined"
+    purpose: str
     extra_data: Optional[Dict[str, str]] = {}
-    connector: Optional[Connector] = Field(default_factory=lambda: {
+    connector: Connector = Field(default_factory=lambda: {
         "connector": "undefined",
         "model_name": "undefined",
         "model_tag": "undefined",
@@ -26,6 +26,8 @@ class ModelResponse(BaseModel):
     flags: Optional[List[str]] = []
 
 if __name__ == "__main__":
+    #TODO: Update tests for new ModelRequest format
+    
     # test the ModelRequest class
     test = ModelRequest(content="Hello, World!")
     print(test)

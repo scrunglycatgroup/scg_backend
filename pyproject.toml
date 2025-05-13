@@ -1,6 +1,6 @@
 [project]
 name = "scg-backend"
-version = "0.1.4"
+version = "0.2.0"
 description = "The Server Backend for the SCG project"
 authors = [
     {name = "Jemma",email = "jf1454@york.ac.uk"},
