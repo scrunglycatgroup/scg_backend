@@ -70,7 +70,7 @@ class OpenAIConnector(BaseConnector):
 
             case "sql_sanit":
                 model = self.__model_name if self.__model_name != "auto" else "gpt-4o-mini-2024-07-18"
-                system_message = "Check the SQL query provided by the user for any potential SQL injection vulnerabilities. If the language in which the query si being handled is known, also give specific suggestions for mitigations."
+                system_message = "Check the SQL query provided by the user for any potential SQL injection vulnerabilities. If the language in which the query is being handled is known, also give specific suggestions for mitigations."
                 user_message = f"Language: {model_request.language}\nLanguage Version: {model_request.language_version}\nCode:\n```\n{model_request.content}\n```"
 
             case _:
