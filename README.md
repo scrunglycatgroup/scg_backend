@@ -1,5 +1,5 @@
 # SCG backend
-![A picture of a waiter (in the style of a patent image](logo.png)
+<img src="https://github.com/scrunglycatgroup/scg_backend/blob/main/logo.png" width=60% height=60%>
    | *Server software*
 
 ## How to setup
