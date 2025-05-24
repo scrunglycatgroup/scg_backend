@@ -24,6 +24,7 @@ class ModelResponse(BaseModel):
     content: str
     status_code: Optional[int] = 200
     flags: Optional[List[str]] = []
+    extra_data: Optional[Dict[str, str]] = {}
 
 if __name__ == "__main__":
     #TODO: Update tests for new ModelRequest format
