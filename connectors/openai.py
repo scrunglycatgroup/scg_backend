@@ -6,7 +6,6 @@ from typing import Optional, Mapping, Union
 import httpx
 from httpx import Timeout
 from fastapi import HTTPException
-#import tiktoken
 
 NOT_GIVEN = NotGiven()
 
@@ -61,17 +60,6 @@ OPENAI_API_PRICING_PER_MILLION = {
     "ft:davinci-002": [12,12],
     "ft:babbage-002": [1.6,1.6],
 }
-
-#def count_tokens(text:str, model_name:Optional[str] = None, encoding_name:Optional[str] = None):
-#    if model_name is None and encoding_name is None:
-#        return -1
-#    
-#    if model_name is not None:
-#        encoding = tiktoken.encoding_for_model(model_name)
-#    else:
-#        encoding = tiktoken.get_encoding(encoding_name)
-#    
-#    return len(encoding.encode(text))
 
 def token_to_price(num_tokens:int, model_name:str, is_input:bool):
     if model_name.startswith("ft:"):
