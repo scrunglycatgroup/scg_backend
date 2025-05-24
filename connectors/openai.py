@@ -78,7 +78,10 @@ def token_to_price(num_tokens:int, model_name:str, is_input:bool):
         model = ":".join(model_name.split(":")[:2])
     else:
         model = model_name
-    return num_tokens * (OPENAI_API_PRICING_PER_MILLION[model][not is_input] / 1000000)
+    if model in OPENAI_API_PRICING_PER_MILLION.keys():
+        return num_tokens * (OPENAI_API_PRICING_PER_MILLION[model][not is_input] / 1000000)
+    else:
+        return -1
 
 class OpenAIConnector(BaseConnector):
     __model_name : str
