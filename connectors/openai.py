@@ -6,8 +6,79 @@ from typing import Optional, Mapping, Union
 import httpx
 from httpx import Timeout
 from fastapi import HTTPException
+#import tiktoken
 
 NOT_GIVEN = NotGiven()
+
+OPENAI_API_PRICING_PER_MILLION = {
+    "gpt-4.1": [2,8],
+    "gpt-4.1-2025-04-14": [2,8],
+    "gpt-4.1-mini": [0.4,1.6],
+    "gpt-4.1-mini-2025-04-14": [0.4,1.6],
+    "gpt-4.1-nano": [0.1,0.4],
+    "gpt-4.1-nano-2025-04-14": [0.1,0.4],
+    "gpt-4.5-preview": [75,150],
+    "gpt-4.5-preview-2025-02-27": [75,150],
+    "gpt-4o": [2.5,10],
+    "gpt-4o-2024-08-06": [2.5,10],
+    "gpt-4o-audio-preview": [2.5,10],
+    "gpt-4o-audio-preview-2024-12-17": [2.5,10],
+    "gpt-4o-realtime-preview": [5,20],
+    "gpt-4o-realtime-preview-2024-12-17": [5,20],
+    "gpt-4o-mini": [0.15,0.6],
+    "gpt-4o-mini-2024-07-18": [0.15,0.6],
+    "gpt-4o-mini-audio-preview": [0.15,0.6],
+    "gpt-4o-mini-audio-preview-2024-12-17": [0.15,0.6],
+    "gpt-4o-mini-realtime-preview": [0.6,2.4],
+    "gpt-4o-mini-realtime-preview-2024-12-17": [0.6,2.4],
+    "o1": [15,60],
+    "o1-2024-12-17": [15,60],
+    "o1-pro": [150,600],
+    "o1-pro-2025-03-19": [15,600],
+    "o3": [10,40],
+    "o3-2025-04-16": [10,40],
+    "o4-mini": [1.1,4.4],
+    "o4-mini-2025-04-16": [1.1,4.4],
+    "o3-mini": [1.1,4.4],
+    "o3-mini-2025-01-31": [1.1,4.4],
+    "o1-mini": [1.1,4.4],
+    "o1-mini-2024-09-12": [1.1,4.4],
+    "codex-mini-latest": [1.5,6],
+    "gpt-4o-mini-search-preview": [0.15,0.6],
+    "gpt-4o-mini-search-preview-2025-03-11": [0.15,0.6],
+    "gpt-4o-search-preview": [2.5,10],
+    "gpt-4o-search-preview-2025-03-11": [2.5,10],
+    "computer-use-preview": [3,13],
+    "computer-use-preview-2025-03-11": [3,12],
+    "ft:o4-mini-2025-04-16": [4,16],
+    "ft:o4-mini-2025-04-16 with data sharing": [2,8],
+    "ft:gpt-4.1-2025-04-14": [3,12],
+    "ft:gpt-4.1-mini-2025-04-14": [0.8,3.2],
+    "ft:gpt-4.1-nano-2025-04-14": [0.2,0.8],
+    "ft:gpt-4o-2024-08-06": [3.75,15],
+    "ft:gpt-4o-mini-2024-07-18": [0.3,1.2],
+    "ft:gpt-3.5-turbo": [3,6],
+    "ft:davinci-002": [12,12],
+    "ft:babbage-002": [1.6,1.6],
+}
+
+#def count_tokens(text:str, model_name:Optional[str] = None, encoding_name:Optional[str] = None):
+#    if model_name is None and encoding_name is None:
+#        return -1
+#    
+#    if model_name is not None:
+#        encoding = tiktoken.encoding_for_model(model_name)
+#    else:
+#        encoding = tiktoken.get_encoding(encoding_name)
+#    
+#    return len(encoding.encode(text))
+
+def token_to_price(num_tokens:int, model_name:str, is_input:bool):
+    if model_name.startswith("ft:"):
+        model = ":".join(model_name.split(":")[:2])
+    else:
+        model = model_name
+    return num_tokens * (OPENAI_API_PRICING_PER_MILLION[model][not is_input] / 1000000)
 
 class OpenAIConnector(BaseConnector):
     __model_name : str
@@ -102,7 +173,13 @@ class OpenAIConnector(BaseConnector):
             response_format={"type": "text"}, temperature=1, max_completion_tokens=2048, top_p=1, frequency_penalty=0, presence_penalty=0, store=False
         )
 
-        return ModelResponse(content=response.choices[0].message.content)
+        return ModelResponse(
+            content=response.choices[0].message.content,
+            extra_data={
+                "tokens": str(response.usage.total_tokens),
+                "cost": f"${(token_to_price(response.usage.prompt_tokens, model, True) + token_to_price(response.usage.completion_tokens, model, False)):.10f}".rstrip('0').rstrip('.')
+                }
+        )
 
     def close(self):
         return
